@@ -1,0 +1,27 @@
+[package]
+name = "mt-cluster"
+description = "Sans-IO clustering core: SWIM membership, rendezvous placement, fencing epochs, routing, lease scheduler"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+
+[features]
+default = []
+# Deterministic simulator building blocks (seeded network, virtual clock, cluster harness).
+sim = []
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+hmac = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+
+[dev-dependencies]
+proptest = { workspace = true }
+# Enables the `sim` feature for this crate's own tests.
+mt-cluster = { path = ".", features = ["sim"] }
+
+[lints]
+workspace = true
