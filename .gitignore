@@ -1,0 +1,8 @@
+docs-bundle.zip
+/target/
+node_modules/
+.gradle/
+build/
+dist/
+*.log
+.DS_Store

@@ -1,0 +1,470 @@
+<title>Business Table Platform Proposal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a proposal document; one wide flow diagram (Input → Platform → Output) anchors the page, sections follow in reading order. */
+:root{
+  --bg:#f5f6f8; --surface:#ffffff; --ink:#17202b; --muted:#566273; --line:#dde2e8;
+  --in:#0e7a6d; --in-soft:#e2f3f0;
+  --use:#4b4fc9; --use-soft:#e9e9fb;
+  --out:#b8620e; --out-soft:#fbeedd;
+  --ai:#8a3fb5; --ai-soft:#f3e8fa;
+  --trust:#3e4a59; --trust-soft:#eceff3;
+  --f-display:"Space Grotesk",ui-sans-serif,system-ui,sans-serif;
+  --f-body:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161d; --surface:#18202a; --ink:#e7ecf2; --muted:#9aa6b5; --line:#2a3542;
+  --in:#4cc7b5; --in-soft:#14302c; --use:#9a9cf5; --use-soft:#22244a;
+  --out:#f0a65a; --out-soft:#3a2914; --ai:#cf98f0; --ai-soft:#33203f;
+  --trust:#b7c2cf; --trust-soft:#222c37; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#11161d; --surface:#18202a; --ink:#e7ecf2; --muted:#9aa6b5; --line:#2a3542;
+  --in:#4cc7b5; --in-soft:#14302c; --use:#9a9cf5; --use-soft:#22244a;
+  --out:#f0a65a; --out-soft:#3a2914; --ai:#cf98f0; --ai-soft:#33203f;
+  --trust:#b7c2cf; --trust-soft:#222c37; color-scheme:dark;}
+
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.6;}
+.wrap{max-width:1120px;margin:0 auto;padding-block:40px 72px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:56px;}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0;letter-spacing:-.01em}
+h1{font-size:clamp(28px,4.2vw,42px);line-height:1.12}
+h2{font-size:24px;line-height:1.25}
+h3{font-size:16.5px;line-height:1.3}
+p{margin:0}
+.lede{font-size:17px;color:var(--muted);max-width:68ch}
+.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+section{display:flex;flex-direction:column;gap:20px}
+.sec-head{display:flex;flex-direction:column;gap:6px;max-width:72ch}
+.sec-head p{color:var(--muted)}
+.chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--f-mono);font-size:11.5px;letter-spacing:.04em;padding:2px 9px;border-radius:999px;white-space:nowrap}
+.c-in{background:var(--in-soft);color:var(--in)} .c-use{background:var(--use-soft);color:var(--use)}
+.c-out{background:var(--out-soft);color:var(--out)} .c-ai{background:var(--ai-soft);color:var(--ai)}
+.c-trust{background:var(--trust-soft);color:var(--trust)}
+
+/* header */
+header{display:flex;flex-direction:column;gap:16px}
+.promises{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:8px}
+.promise{border-top:2px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:4px}
+.promise b{font-family:var(--f-display);font-size:16px}
+.promise span{color:var(--muted);font-size:14px}
+
+/* flow diagram */
+.flow-scroll{overflow-x:auto}
+.flow{display:grid;grid-template-columns:minmax(200px,1fr) 28px minmax(380px,2.1fr) 28px minmax(200px,1fr);gap:0;align-items:stretch;min-width:880px}
+.col{display:flex;flex-direction:column;gap:10px}
+.col-title{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+.col-title h3{font-size:15px}
+.col-title .eyebrow{font-size:11px}
+.io{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:3px}
+.io b{font-size:14px}
+.io span{font-size:12.8px;color:var(--muted);line-height:1.45}
+.col.in .io{border-left:3px solid var(--in)}
+.col.out .io{border-left:3px solid var(--out)}
+.arrow{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:20px}
+.stack{display:flex;flex-direction:column;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px}
+.layer{border-radius:8px;padding:10px 12px;display:grid;grid-template-columns:120px 1fr;gap:12px;align-items:start}
+.layer .ln{font-family:var(--f-mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;padding-top:2px}
+.layer .lc b{font-size:14px;display:block}
+.layer .lc span{font-size:12.8px;color:var(--muted);line-height:1.45;display:block}
+.l-sol{background:var(--use-soft)} .l-sol .ln{color:var(--use)}
+.l-ai{background:var(--ai-soft)} .l-ai .ln{color:var(--ai)}
+.l-proc{background:var(--use-soft)} .l-proc .ln{color:var(--use)}
+.l-data{background:var(--in-soft)} .l-data .ln{color:var(--in)}
+.l-conn{background:var(--out-soft)} .l-conn .ln{color:var(--out)}
+.l-trust{background:var(--trust-soft)} .l-trust .ln{color:var(--trust)}
+.tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.tags i{font-style:normal;font-size:11.5px;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:1px 7px;color:var(--ink)}
+.flow-note{font-size:13px;color:var(--muted)}
+
+/* three-part detail */
+.trio{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.panel.in{border-top:3px solid var(--in)} .panel.use{border-top:3px solid var(--use)} .panel.out{border-top:3px solid var(--out)}
+.panel ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:12px}
+.panel li{display:flex;flex-direction:column;gap:2px}
+.panel li b{font-size:14px}
+.panel li span{font-size:13.3px;color:var(--muted)}
+.guard{font-size:12.8px;border-top:1px dashed var(--line);padding-top:10px;color:var(--muted)}
+.guard b{color:var(--ink)}
+
+/* loop */
+.loop{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;counter-reset:step}
+.step{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.step b{font-family:var(--f-display);font-size:14.5px}
+.step span{font-size:12.6px;color:var(--muted);line-height:1.45}
+.step .eyebrow{font-size:10.5px}
+.loop-foot{font-size:13.5px;color:var(--muted);max-width:80ch}
+
+/* personas */
+.people{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.person{border-left:2px solid var(--use);padding:4px 0 4px 14px;display:flex;flex-direction:column;gap:4px}
+.person b{font-size:14.5px}
+.person span{font-size:13.3px;color:var(--muted)}
+
+/* capability table */
+.tbl-wrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+table{border-collapse:collapse;width:100%;min-width:720px;font-size:13.5px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--f-mono);font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:500}
+tr:last-child td{border-bottom:none}
+td.cap b{display:block;font-size:14px}
+td.layername{white-space:nowrap}
+
+/* scenarios */
+.tabs{display:flex;flex-wrap:wrap;gap:6px}
+.tab{font:inherit;font-size:13.5px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:6px 14px;cursor:pointer}
+.tab[aria-selected="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.tab:focus-visible{outline:2px solid var(--use);outline-offset:2px}
+.tab small{font-family:var(--f-mono);font-size:10.5px;margin-left:6px;opacity:.75}
+.scn{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.scn .panel{gap:10px}
+.scn .panel ul{gap:8px}
+.scn .panel li{font-size:13.5px;flex-direction:row;gap:8px}
+.scn .panel li::before{content:"";flex:0 0 6px;height:6px;border-radius:50%;margin-top:8px;background:currentColor;opacity:.5}
+.scn .in li::before{color:var(--in)} .scn .use li::before{color:var(--use)} .scn .out li::before{color:var(--out)}
+.scn-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
+.ai-line{font-size:13.3px;background:var(--ai-soft);border-radius:10px;padding:10px 14px;color:var(--ink)}
+.ai-line b{color:var(--ai)}
+
+/* AI points */
+.ai-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.aip{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.aip b{font-family:var(--f-display);font-size:15px}
+.aip span{font-size:13px;color:var(--muted)}
+.aip em{font-style:normal;font-size:12.5px;color:var(--ai)}
+
+/* journey + principles */
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+ol.journey{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px;counter-reset:j}
+ol.journey li{display:grid;grid-template-columns:30px 1fr auto;gap:10px;align-items:baseline;counter-increment:j}
+ol.journey li::before{content:counter(j);font-family:var(--f-mono);font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:50%;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center}
+ol.journey li span{font-size:14px}
+ol.journey li em{font-style:normal;font-family:var(--f-mono);font-size:11.5px;color:var(--in);white-space:nowrap;font-variant-numeric:tabular-nums}
+ul.principles{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px}
+ul.principles li{font-size:14px;padding-left:14px;border-left:2px solid var(--line)}
+ul.principles li b{display:block}
+ul.principles li span{color:var(--muted);font-size:13.3px}
+
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.kpi{border-top:2px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:2px}
+.kpi b{font-size:14px}
+.kpi span{font-size:13px;color:var(--muted)}
+
+.decide{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.decide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px}
+.decide li{font-size:14px}
+footer{font-size:12.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:16px}
+
+@media (max-width:900px){
+  .trio,.scn,.people{grid-template-columns:1fr}
+  .ai-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .loop{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .two{grid-template-columns:1fr}
+  .promises{grid-template-columns:1fr}
+}
+@media (max-width:480px){
+  .ai-grid,.kpis{grid-template-columns:1fr}
+  .layer{grid-template-columns:1fr;gap:4px}
+}
+@media (prefers-reduced-motion:no-preference){.tab{transition:background .15s,color .15s}}
+</style>
+
+<div class="wrap">
+
+<header>
+  <span class="eyebrow">Product proposal · v1.0 · for business review</span>
+  <h1>A business table platform that turns scattered company data into working processes</h1>
+  <p class="lede">Companies already have their data in shop platforms, HR files, databases, spreadsheets, emails and documents. This product brings that data in, lets teams run their daily work on it with clear owners, approvals and AI help, and sends results back out as decisions, actions, reports and evidence. It ships with ready-made business scenarios, so a company can start using it on day one.</p>
+  <div class="promises">
+    <div class="promise"><b>Connect what you already have</b><span>Data flows in from existing systems, files and documents. Nothing has to be retyped and nothing has to be replaced.</span></div>
+    <div class="promise"><b>Run work with clear ownership</b><span>Every request, case and task has an owner, a deadline and a defined end. Nothing gets stuck silently.</span></div>
+    <div class="promise"><b>Prove what happened</b><span>Every change, approval and AI suggestion is recorded and can be shown to managers, customers and auditors.</span></div>
+  </div>
+</header>
+
+<section aria-labelledby="h-arch">
+  <div class="sec-head">
+    <span class="eyebrow">1 · Overall architecture</span>
+    <h2 id="h-arch">Input, usage, output</h2>
+    <p>Business information enters on the left, people and AI work on it in the middle, and results leave on the right. The middle is organised in layers: ready-made solutions on top, the shared building blocks underneath, and the trust layer at the base.</p>
+  </div>
+  <div class="flow-scroll" role="region" aria-label="Architecture diagram" tabindex="0">
+    <div class="flow">
+      <div class="col in">
+        <div class="col-title"><span class="chip c-in">Input</span><span class="eyebrow">what comes in</span></div>
+        <div class="io"><b>Existing business systems</b><span>Shop platforms, ERP, HR files, help desks, ad platforms, company databases</span></div>
+        <div class="io"><b>People's entries</b><span>Forms, requests, weekly reports from stores or teams, edits in tables</span></div>
+        <div class="io"><b>Documents and messages</b><span>Receipts, invoices, contracts, CVs, emails, chat messages, photos</span></div>
+        <div class="io"><b>Business rules</b><span>Who may do what, approval limits, categories and code lists, deadlines</span></div>
+      </div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="col">
+        <div class="col-title"><span class="chip c-use">Usage</span><span class="eyebrow">the platform, by layer</span></div>
+        <div class="stack">
+          <div class="layer l-sol"><span class="ln">Solutions</span><div class="lc"><b>Ready-made business scenarios</b><span>Installed in one click, adapted without code</span><div class="tags"><i>HR &amp; Admin</i><i>E-commerce after-sales</i><i>New Media</i><i>Recruitment</i><i>Marketing</i><i>R&amp;D</i></div></div></div>
+          <div class="layer l-ai"><span class="ln">AI assistance</span><div class="lc"><b>AI at five points of the work</b><span>Builds systems, fills and checks data, helps inside workflows, explains dashboards, answers business questions</span></div></div>
+          <div class="layer l-proc"><span class="ln">Business process</span><div class="lc"><b>How work moves</b><span>Statuses with rules, owners and deadlines, approvals drawn in a visual designer, data rules (when / if / then), tasks, data collection rounds, an exceptions inbox for anything stuck</span></div></div>
+          <div class="layer l-data"><span class="ln">Business data</span><div class="lc"><b>How information is organised</b><span>Tables and fields, shared code lists (categories, regions, reasons), settings, and business permissions (who may do what, on which records)</span></div></div>
+          <div class="layer l-conn"><span class="ln">Connections</span><div class="lc"><b>Data sources in, destinations out</b><span>Sources stay the owner of their data. Results go out as notifications, actions, data feeds and exports</span></div></div>
+          <div class="layer l-trust"><span class="ln">Trust</span><div class="lc"><b>Records, privacy, control</b><span>Full change history, approval evidence, privacy controls by field, self-hosted or cloud</span></div></div>
+        </div>
+      </div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="col out">
+        <div class="col-title"><span class="chip c-out">Output</span><span class="eyebrow">what comes out</span></div>
+        <div class="io"><b>Decisions and finished work</b><span>Approved requests, resolved cases, completed onboarding, published content</span></div>
+        <div class="io"><b>Actions in other systems</b><span>Refund issued in the shop, payment file to accounting, message to a customer</span></div>
+        <div class="io"><b>Reports and dashboards</b><span>Official numbers, scheduled reports per manager, alerts that create tasks</span></div>
+        <div class="io"><b>Evidence and exports</b><span>Who did what and when, approval trails, data exports for audits and analysis</span></div>
+      </div>
+    </div>
+  </div>
+  <p class="flow-note">On a phone, scroll the diagram sideways.</p>
+</section>
+
+<section aria-labelledby="h-iuo">
+  <div class="sec-head">
+    <span class="eyebrow">2 · The three parts in detail</span>
+    <h2 id="h-iuo">What goes in, how it is used, what comes out</h2>
+  </div>
+  <div class="trio">
+    <div class="panel in">
+      <span class="chip c-in" style="align-self:flex-start">Input</span>
+      <ul>
+        <li><b>Data sources</b><span>Connect a shop platform, a company database or a recurring file. The source system stays in charge of its data; this platform reads it and keeps it up to date.</span></li>
+        <li><b>Send-to-table address</b><span>Any system can send records to a table in its own format. The mapping to the table is set up once on screen, with AI suggestions.</span></li>
+        <li><b>Forms and collection rounds</b><span>Forms that pick records from existing tables, fill in the user's details, take photos and files, and read uploaded documents with AI. Weekly figures from every store, with reminders for missing submissions.</span></li>
+        <li><b>Documents and messages</b><span>Upload or forward receipts, invoices, contracts or chat messages. AI reads them and fills in the fields for a person to confirm.</span></li>
+        <li><b>Imports</b><span>Excel and CSV with saved templates, a preview before anything changes, and an error list to fix and retry.</span></li>
+      </ul>
+      <p class="guard"><b>Quality guard at the door:</b> values are checked against field rules and the company's code lists. Anything that doesn't fit waits in a review queue with an owner, instead of being guessed or dropped.</p>
+    </div>
+    <div class="panel use">
+      <span class="chip c-use" style="align-self:flex-start">Usage</span>
+      <ul>
+        <li><b>My work</b><span>One place for each person: tasks assigned to me, approvals waiting, items near their deadline, anything that needs my attention.</span></li>
+        <li><b>Tables, boards and record views</b><span>Grid, Kanban, calendar and gallery views, with a pop-up for each record that shows its full history and next steps.</span></li>
+        <li><b>Rules that move work along</b><span>Status changes follow the company's rules. Work is assigned, acknowledged and escalated when late.</span></li>
+        <li><b>Approvals</b><span>One after another, all must agree, or any one may decide. Approvers come from business permissions, such as "may approve purchases up to ¥1,000,000", not from job titles.</span></li>
+        <li><b>AI help at each step</b><span>Suggests categories, checks requests before approval, drafts replies. A person decides.</span></li>
+      </ul>
+      <p class="guard"><b>Nothing gets lost:</b> anything without an owner, past its deadline or failed goes to an exceptions inbox, and someone is responsible for it.</p>
+    </div>
+    <div class="panel out">
+      <span class="chip c-out" style="align-self:flex-start">Output</span>
+      <ul>
+        <li><b>Actions in other systems</b><span>A business step can call another system, for example issue a refund in the shop. The source system then reports back the new status.</span></li>
+        <li><b>Alerts and notifications</b><span>Rules decide when to alert whom: in-app, browser push, email, SMS or chat apps, with escalation when nobody responds and delivery status on the record.</span></li>
+        <li><b>Notifications to other systems</b><span>Other systems can be told when something changes, or can collect all changes since their last visit.</span></li>
+        <li><b>Reports and dashboards</b><span>Official numbers with a clear owner, drill-down to the records behind every figure, and scheduled reports filtered for each recipient.</span></li>
+        <li><b>Data feeds and exports</b><span>Formatted Excel, CSV and regular feeds for accounting or analysis, with personal data protected.</span></li>
+        <li><b>Evidence</b><span>A tamper-evident record of every change and approval, ready for audits.</span></li>
+      </ul>
+      <p class="guard"><b>One direction out:</b> the platform never overwrites another system's data. Changes there happen through that system's own actions, so each system stays the single owner of its data.</p>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="h-loop">
+  <div class="sec-head">
+    <span class="eyebrow">3 · How every scenario runs</span>
+    <h2 id="h-loop">The closed business loop</h2>
+    <p>Each scenario follows the same loop. The loop is what turns a table of data into finished work.</p>
+  </div>
+  <div class="loop">
+    <div class="step"><span class="eyebrow">Step 1</span><b>Capture</b><span>Data arrives from a source, a form or a document</span></div>
+    <div class="step"><span class="eyebrow">Step 2</span><b>Check</b><span>Rules and code lists validate it</span></div>
+    <div class="step"><span class="eyebrow">Step 3</span><b>Route</b><span>An owner is assigned and confirms</span></div>
+    <div class="step"><span class="eyebrow">Step 4</span><b>Act</b><span>Work, approvals, AI help</span></div>
+    <div class="step"><span class="eyebrow">Step 5</span><b>Confirm</b><span>The result is verified and recorded</span></div>
+    <div class="step"><span class="eyebrow">Step 6</span><b>Measure</b><span>Dashboards show results and delays</span></div>
+    <div class="step"><span class="eyebrow">Step 7</span><b>Improve</b><span>Rules and limits are adjusted</span></div>
+  </div>
+  <p class="loop-foot">Any break in the loop, such as a missing owner, a missed deadline or a failed action, becomes an exception with a responsible person.</p>
+</section>
+
+<section aria-labelledby="h-people">
+  <div class="sec-head">
+    <span class="eyebrow">4 · Who uses it</span>
+    <h2 id="h-people">People and what they do</h2>
+    <p>Users are defined by what they do in the business, not by job title. The same person can hold several of these.</p>
+  </div>
+  <div class="people">
+    <div class="person"><b>People doing the work</b><span>Handle cases, submit requests and reports, complete tasks, confirm AI suggestions.</span></div>
+    <div class="person"><b>Approvers</b><span>Review requests with AI pre-check findings, approve, reject or send back, delegate during leave.</span></div>
+    <div class="person"><b>Managers</b><span>Follow dashboards and exceptions, open the records behind any number, adjust deadlines and limits.</span></div>
+    <div class="person"><b>Business builders</b><span>Adapt scenarios or build new ones by describing them, from a spreadsheet, or by hand, without code.</span></div>
+    <div class="person"><b>Data owners and admins</b><span>Maintain code lists, fields and settings, connect data sources, grant business permissions, review access.</span></div>
+    <div class="person"><b>Auditors and external partners</b><span>Auditors see evidence trails. Suppliers and candidates see only their own records through forms or guest access.</span></div>
+  </div>
+</section>
+
+<section aria-labelledby="h-caps">
+  <div class="sec-head">
+    <span class="eyebrow">5 · Capability map</span>
+    <h2 id="h-caps">Fourteen core capabilities behind every scenario</h2>
+    <p>All scenarios are built from these. A company can combine them into its own solutions in the same way.</p>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Layer</th><th>Capability</th><th>What it gives the business</th></tr></thead>
+      <tbody>
+        <tr><td class="layername"><span class="chip c-use">Solutions</span></td><td class="cap"><b>Scenario packages</b></td><td>Ready-made systems for HR &amp; Admin, E-commerce, New Media, Recruitment, Marketing and R&amp;D, with sample data, dashboards and AI set up</td></tr>
+        <tr><td class="layername"><span class="chip c-ai">AI</span></td><td class="cap"><b>AI at five points</b></td><td>Builds systems, fills and checks data, helps in workflows, explains dashboards, answers questions. Everything still works with AI turned off</td></tr>
+        <tr><td class="layername"><span class="chip c-use">Process</span></td><td class="cap"><b>Process and approvals</b></td><td>Statuses with rules, owners, deadlines, approval chains, tasks, exceptions inbox</td></tr>
+        <tr><td class="layername"><span class="chip c-use">Process</span></td><td class="cap"><b>Forms and collection rounds</b></td><td>Request forms and recurring reporting from teams, stores or partners, with tracking of who has submitted</td></tr>
+        <tr><td class="layername"><span class="chip c-use">Process</span></td><td class="cap"><b>Data rules</b></td><td>"When this happens, if these conditions hold, then do this": block wrong entries, react to new data, alert on numbers, with throttling, quiet hours and escalation</td></tr>
+        <tr><td class="layername"><span class="chip c-out">Connections</span></td><td class="cap"><b>Notification center</b></td><td>In-app, browser push, email, SMS and chat apps, with templates per language, preferences, consent, quiet hours and delivery tracking</td></tr>
+        <tr><td class="layername"><span class="chip c-use">Process</span></td><td class="cap"><b>Reports and dashboards</b></td><td>Official numbers, period comparisons, scheduled delivery, alerts that become tasks</td></tr>
+        <tr><td class="layername"><span class="chip c-in">Data</span></td><td class="cap"><b>Tables and views</b></td><td>Fast tables that stay smooth with very large data, boards, calendars, record pop-ups, tabs, light and dark themes</td></tr>
+        <tr><td class="layername"><span class="chip c-in">Data</span></td><td class="cap"><b>Configurable fields</b></td><td>Choose how each field is entered and shown, switch fields on or off, group them, check formats such as phone numbers or tax IDs</td></tr>
+        <tr><td class="layername"><span class="chip c-in">Data</span></td><td class="cap"><b>Code lists and reference data</b></td><td>Shared lists and hierarchies (categories, regions, reasons) in table or tree view, the same everywhere in the company</td></tr>
+        <tr><td class="layername"><span class="chip c-in">Data</span></td><td class="cap"><b>Settings</b></td><td>Business settings such as limits and deadlines, changed without code and with a change history</td></tr>
+        <tr><td class="layername"><span class="chip c-in">Data</span></td><td class="cap"><b>Business permissions</b></td><td>"Who may do what, on which records, up to which limit", based on the company's own operations instead of job titles</td></tr>
+        <tr><td class="layername"><span class="chip c-out">Connections</span></td><td class="cap"><b>Data sources and destinations</b></td><td>Bring data in from existing systems; send actions, notifications, feeds and exports out</td></tr>
+        <tr><td class="layername"><span class="chip c-trust">Trust</span></td><td class="cap"><b>History, evidence, privacy, deployment</b></td><td>Every change recorded, approval evidence, personal data protection, run on your own servers or in the cloud</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section aria-labelledby="h-scn">
+  <div class="sec-head">
+    <span class="eyebrow">6 · Scenarios</span>
+    <h2 id="h-scn">Input, usage and output for each scenario</h2>
+    <p>Select a scenario. The first two are proposed for the first release.</p>
+  </div>
+  <div class="tabs" role="tablist" aria-label="Scenarios" id="tabs"></div>
+  <div class="scn-meta" id="scn-meta"></div>
+  <div class="scn" id="scn" role="tabpanel" aria-live="polite"></div>
+  <p class="ai-line" id="scn-ai"></p>
+</section>
+
+<section aria-labelledby="h-ai">
+  <div class="sec-head">
+    <span class="eyebrow">7 · AI in business terms</span>
+    <h2 id="h-ai">Where AI helps</h2>
+    <p>AI turns messy information into reliable records and helps people at each step. People make the decisions, and every AI contribution is labelled and can be reviewed.</p>
+  </div>
+  <div class="ai-grid">
+    <div class="aip"><b>AI systems</b><span>Describe a need, upload a spreadsheet or point to a database, and get a working system to review.</span><em>Example: "Build an asset register for our offices"</em></div>
+    <div class="aip"><b>AI for tables</b><span>Fills fields from documents and messages, sorts items into categories, translates, spots duplicates.</span><em>Example: receipt photo → expense record</em></div>
+    <div class="aip"><b>AI workflows</b><span>Routes new items, checks requests before approval, drafts replies, answers questions and hands over to a person when unsure.</span><em>Example: negative review → reply draft</em></div>
+    <div class="aip"><b>AI dashboards</b><span>Creates a dashboard from a goal, writes a short summary of each update, flags unusual numbers as tasks.</span><em>Example: return rate jump → task for owner</em></div>
+    <div class="aip"><b>AI analytics</b><span>Answers business questions from the official numbers, shows how it got the answer, asks when unclear.</span><em>Example: "Which SKUs drive returns?"</em></div>
+  </div>
+</section>
+
+<section aria-labelledby="h-start">
+  <div class="sec-head">
+    <span class="eyebrow">8 · Adoption</span>
+    <h2 id="h-start">From install to first finished business loop</h2>
+  </div>
+  <div class="two">
+    <div class="panel">
+      <h3>First day</h3>
+      <ol class="journey">
+        <li><span>Install the open-source version on your own server, or later sign up for the cloud version</span><em>≈ 5 min</em></li>
+        <li><span>Choose scenario packages; they arrive with sample data and dashboards</span><em>≈ 2 min</em></li>
+        <li><span>Connect a data source; AI suggests how fields match and shows a preview</span><em>≈ 10 min</em></li>
+        <li><span>Invite colleagues and give them business permissions from the package</span><em>≈ 5 min</em></li>
+        <li><span>Walk one item through the whole loop with the guided checklist</span><em>≈ 10 min</em></li>
+      </ol>
+    </div>
+    <div class="panel">
+      <h3>Principles we commit to</h3>
+      <ul class="principles">
+        <li><b>Source systems stay in charge</b><span>Data comes in from them; we never overwrite their data.</span></li>
+        <li><b>People decide</b><span>AI suggests, checks and drafts. It never approves or rejects.</span></li>
+        <li><b>Works without AI</b><span>Every scenario runs fully with AI switched off.</span></li>
+        <li><b>Built on your operations, not job titles</b><span>Permissions describe what people do in your business.</span></li>
+        <li><b>Your data, your choice</b><span>Open source, self-hosted or cloud, full export at any time.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="h-kpi">
+  <div class="sec-head">
+    <span class="eyebrow">9 · Value</span>
+    <h2 id="h-kpi">How customers will measure success</h2>
+  </div>
+  <div class="kpis">
+    <div class="kpi"><b>Time to first value</b><span>From install to the first completed business loop on the same day</span></div>
+    <div class="kpi"><b>Work finished on time</b><span>Share of requests and cases closed within their deadline</span></div>
+    <div class="kpi"><b>Less manual entry</b><span>Share of records arriving from sources and documents instead of retyping</span></div>
+    <div class="kpi"><b>Nothing stuck</b><span>Open exceptions and their age, falling over time</span></div>
+  </div>
+</section>
+
+<section aria-labelledby="h-decide">
+  <div class="sec-head">
+    <span class="eyebrow">10 · For your review</span>
+    <h2 id="h-decide">Points to confirm</h2>
+  </div>
+  <div class="decide">
+    <ol>
+      <li>Do the six layers (solutions, AI, process, data, connections, trust) reflect how you want to present the product?</li>
+      <li>Are the first-release scenarios right: HR &amp; Admin and E-commerce after-sales?</li>
+      <li>Is anything missing from Input, Usage or Output that your customers would expect?</li>
+      <li>Should the product have a working name before the next round?</li>
+    </ol>
+  </div>
+</section>
+
+<footer>Business proposal based on research and design documents 01–09. Technical design is kept in those documents and is intentionally left out here.</footer>
+</div>
+
+<script>
+const S=[
+ {id:"hr",name:"HR & Admin",tag:"Release 1",
+  in:["Employee list from an HR file or system","Leave, expense and purchase requests via forms","Receipt and invoice photos","New-hire handoff from Recruitment"],
+  use:["Expense pre-check against policy, then approval by limit","Onboarding checklist split into tasks for IT, admin and manager","Office equipment assigned and tracked","Policy questions answered by an assistant that hands over to HR"],
+  out:["Approved payments sent to accounting as a file","Equipment returned and access removed when people leave","Request deadline and asset dashboards","Evidence of every approval"],
+  ai:"Reads receipts into expense records, checks requests before approval, answers policy questions and logs the ones it could not answer."},
+ {id:"ecom",name:"E-commerce after-sales",tag:"Release 1",
+  in:["Orders and returns from shop platforms","Customer reviews and support messages","Product list with categories","Return reasons and issue types as code lists"],
+  use:["Each case sorted by issue and routed to an owner with a deadline","Refunds approved within business limits","Replies drafted for the agent to approve","Root causes tagged for product teams"],
+  out:["Refund issued in the shop platform; status comes back automatically","Reply sent to the customer","Return rate and response time dashboards","Alerts on unusual return spikes"],
+  ai:"Sorts reviews and messages by issue, drafts replies in the customer's language, explains which products drive returns."},
+ {id:"media",name:"New Media",tag:"Release 2",
+  in:["Topic ideas and reference content","Performance data from video and social platforms on a schedule","Creator details and collaboration briefs","Comments from audiences"],
+  use:["Topics move through script, shoot, edit, review and publish with owners","Reminders chase late steps","Collaborations approved and tracked to payment","Comments sorted and answered"],
+  out:["Publishing calendar across platforms","Performance board comparing topics with benchmarks","Payments to creators","Insights feeding the next topics"],
+  ai:"Suggests titles and script variants, sorts comments, drafts briefs, explains which topics perform best."},
+ {id:"rec",name:"Recruitment",tag:"Release 2",
+  in:["Headcount requests","CVs from email, careers form and job boards","Interview feedback","Offer details"],
+  use:["Headcount and offers approved within budget","Candidates move through stages with owners","Interviews scheduled with feedback deadlines","Hand-over to HR onboarding when an offer is accepted"],
+  out:["Signed offers and onboarding cases","Hiring funnel and time-to-hire dashboards","Candidate data deleted on schedule","Evidence of each hiring decision"],
+  ai:"Reads CVs into candidate records and summarises feedback. It never ranks or rejects candidates; recruiters make every decision."},
+ {id:"mkt",name:"Marketing",tag:"Release 3",
+  in:["Campaign plans and budgets","Spend and results from ad platforms","Leads from forms","Brand rules and required disclaimers"],
+  use:["Budgets and campaign briefs approved","Content reviewed for brand and claims before launch","Leads handed to sales with confirmation","Spend tracked against plan"],
+  out:["Leads in the sales system","Spend and return dashboards per channel","Alerts when costs jump","Campaign reviews feeding the next plan"],
+  ai:"Writes copy variants per market, checks content against brand rules, explains which channels beat targets."},
+ {id:"rd",name:"R&D",tag:"Release 3",
+  in:["Feature requests and support issues","Code changes linked to work items","Bug reports","Release plans"],
+  use:["Bugs sorted by area and severity with deadlines","Work planned in iterations","Releases approved","Stale items chased"],
+  out:["Release notes","Delivery and quality dashboards","Status updates to support","Learning fed back into planning"],
+  ai:"Suggests severity and area for new bugs, spots duplicates, drafts release notes, explains delivery delays."}
+];
+const tabs=document.getElementById("tabs"),panel=document.getElementById("scn"),meta=document.getElementById("scn-meta"),ai=document.getElementById("scn-ai");
+function li(a){return a.map(x=>"<li>"+x+"</li>").join("")}
+function show(id,focus){
+  const s=S.find(x=>x.id===id)||S[0];
+  [...tabs.children].forEach(b=>{const on=b.dataset.id===s.id;b.setAttribute("aria-selected",on);b.tabIndex=on?0:-1;if(on&&focus)b.focus();});
+  meta.innerHTML='<span class="chip '+(s.tag==="Release 1"?"c-in":"c-trust")+'">'+s.tag+'</span><span>'+s.name+'</span>';
+  panel.innerHTML='<div class="panel in"><span class="chip c-in" style="align-self:flex-start">Input</span><ul>'+li(s.in)+'</ul></div>'+
+    '<div class="panel use"><span class="chip c-use" style="align-self:flex-start">Usage</span><ul>'+li(s.use)+'</ul></div>'+
+    '<div class="panel out"><span class="chip c-out" style="align-self:flex-start">Output</span><ul>'+li(s.out)+'</ul></div>';
+  ai.innerHTML='<b>AI in this scenario:</b> '+s.ai;
+  try{localStorage.setItem("scn",s.id)}catch(e){}
+}
+S.forEach(s=>{const b=document.createElement("button");b.className="tab";b.type="button";b.id="tab-"+s.id;b.setAttribute("role","tab");b.dataset.id=s.id;b.innerHTML=s.name+"<small>"+s.tag.replace("Release ","R")+"</small>";b.addEventListener("click",()=>show(s.id));tabs.appendChild(b);});
+tabs.addEventListener("keydown",e=>{const i=S.findIndex(s=>tabs.querySelector('[aria-selected="true"]').dataset.id===s.id);if(e.key==="ArrowRight"){show(S[(i+1)%S.length].id,true);e.preventDefault()}if(e.key==="ArrowLeft"){show(S[(i-1+S.length)%S.length].id,true);e.preventDefault()}});
+let start="hr";try{start=localStorage.getItem("scn")||"hr"}catch(e){}
+show(start);
+</script>
