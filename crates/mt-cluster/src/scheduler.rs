@@ -134,23 +134,23 @@ fn claim_with_expiry<S: LeaseStore + ?Sized>(
     let (term, cursor_ms) = match &current {
         None => (1, 0),
         Some(r) => {
-            if now_ms < r.expires_at_ms {
-                match &r.holder {
-                    Some(h) if h == me => {
-                        let token = LeaseToken {
-                            shard,
-                            term: r.term,
-                            holder: me.clone(),
-                        };
-                        return Ok((token, r.expires_at_ms));
-                    }
-                    Some(_) => {
-                        return Err(ClusterError::LeaseHeld {
-                            until_ms: r.expires_at_ms,
-                        });
-                    }
-                    None => {}
+            // A holder counts only while its lease is unexpired.
+            let live_holder = r.holder.as_ref().filter(|_| now_ms < r.expires_at_ms);
+            match live_holder {
+                Some(h) if h == me => {
+                    let token = LeaseToken {
+                        shard,
+                        term: r.term,
+                        holder: me.clone(),
+                    };
+                    return Ok((token, r.expires_at_ms));
                 }
+                Some(_) => {
+                    return Err(ClusterError::LeaseHeld {
+                        until_ms: r.expires_at_ms,
+                    });
+                }
+                None => {}
             }
             (
                 r.term.checked_add(1).ok_or(ClusterError::EpochOverflow)?,

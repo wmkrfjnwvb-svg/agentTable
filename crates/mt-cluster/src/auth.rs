@@ -27,9 +27,10 @@ const LABEL_HELLO: &[u8] = b"mt-cluster/hello/v1";
 const LABEL_ACK: &[u8] = b"mt-cluster/ack/v1";
 const LABEL_CONFIRM: &[u8] = b"mt-cluster/confirm/v1";
 
-/// The shared cluster secret. `Debug` never prints the bytes.
-#[derive(Clone, PartialEq, Eq)]
-pub struct ClusterSecret(Vec<u8>);
+/// The shared cluster secret, held as a keyed HMAC state: the raw bytes are not kept, and
+/// the type can neither be printed nor compared (no timing side channel).
+#[derive(Clone)]
+pub struct ClusterSecret(Hmac<Sha256>);
 
 impl ClusterSecret {
     /// Wraps a secret; refuses secrets shorter than [`MIN_SECRET_BYTES`].
@@ -37,7 +38,10 @@ impl ClusterSecret {
         if bytes.len() < MIN_SECRET_BYTES {
             return Err(ClusterError::SecretTooShort);
         }
-        Ok(Self(bytes.to_vec()))
+        // HMAC accepts keys of any length, so this cannot fail for a long enough secret.
+        Hmac::<Sha256>::new_from_slice(bytes)
+            .map(Self)
+            .map_err(|_| ClusterError::SecretTooShort)
     }
 }
 
@@ -54,9 +58,8 @@ fn mac(
     node: &NodeId,
     nonce: &[u8; 16],
     peer_nonce: &[u8; 16],
-) -> Result<Hmac<Sha256>, ClusterError> {
-    let mut m =
-        Hmac::<Sha256>::new_from_slice(&secret.0).map_err(|_| ClusterError::SecretTooShort)?;
+) -> Hmac<Sha256> {
+    let mut m = secret.0.clone();
     m.update(label);
     m.update(&protocol.major.to_be_bytes());
     m.update(&protocol.minor.to_be_bytes());
@@ -70,7 +73,7 @@ fn mac(
     m.update(node.addr.as_bytes());
     m.update(nonce);
     m.update(peer_nonce);
-    Ok(m)
+    m
 }
 
 fn tag(m: Hmac<Sha256>) -> [u8; 32] {
@@ -117,7 +120,7 @@ impl Handshake {
             &me,
             &nonce,
             &[0; 16],
-        )?);
+        ));
         let hello = Message::Hello(Hello {
             protocol: PROTOCOL_VERSION,
             node: me.clone(),
@@ -194,7 +197,7 @@ impl Handshake {
                         &h.node,
                         &h.nonce,
                         &[0; 16],
-                    )?,
+                    ),
                     &h.tag,
                 )?;
                 let t = tag(mac(
@@ -204,7 +207,7 @@ impl Handshake {
                     &self.me,
                     &self.nonce,
                     &h.nonce,
-                )?);
+                ));
                 let ack = Message::HelloAck(Hello {
                     protocol: PROTOCOL_VERSION,
                     node: self.me.clone(),
@@ -233,7 +236,7 @@ impl Handshake {
                         &h.node,
                         &h.nonce,
                         &self.nonce,
-                    )?,
+                    ),
                     &h.tag,
                 )?;
                 let t = tag(mac(
@@ -243,7 +246,7 @@ impl Handshake {
                     &self.me,
                     &self.nonce,
                     &h.nonce,
-                )?);
+                ));
                 Ok((
                     State::Established(h.node.clone()),
                     Some(Message::HelloConfirm { tag: t }),
@@ -265,7 +268,7 @@ impl Handshake {
                         &peer,
                         &peer_nonce,
                         &self.nonce,
-                    )?,
+                    ),
                     t,
                 )?;
                 Ok((State::Established(peer), None))

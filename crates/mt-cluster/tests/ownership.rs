@@ -426,7 +426,14 @@ fn std_draining_node_forwards_everything_it_does_not_hold() {
 fn std_fan_out_splits_subscribers() {
     let table = RoutingTable::new(node(1), even(&[1, 2, 3]));
     let gone = node(8);
-    let subscribers = [node(3), node(1), gone.clone(), node(2), node(3), gone.clone()];
+    let subscribers = [
+        node(3),
+        node(1),
+        gone.clone(),
+        node(2),
+        node(3),
+        gone.clone(),
+    ];
     let fan_out = table.fan_out(&subscribers);
     assert!(fan_out.local);
     assert_eq!(fan_out.remote, vec![node(2), node(3)]);
@@ -690,9 +697,15 @@ fn std_drain_stops_acquisitions_and_completes_when_everything_is_released() {
 
     fencer.begin_drain();
     assert!(fencer.is_draining() && !fencer.is_drained());
-    assert_eq!(fencer.acquire(&mut store, b"c"), Err(ClusterError::Draining));
+    assert_eq!(
+        fencer.acquire(&mut store, b"c"),
+        Err(ClusterError::Draining)
+    );
     // Even a resource it already holds is not re-confirmed during a drain.
-    assert_eq!(fencer.acquire(&mut store, b"a"), Err(ClusterError::Draining));
+    assert_eq!(
+        fencer.acquire(&mut store, b"a"),
+        Err(ClusterError::Draining)
+    );
 
     let held: Vec<Vec<u8>> = fencer.held().map(<[u8]>::to_vec).collect();
     assert_eq!(held, vec![b"a".to_vec(), b"b".to_vec()]);
@@ -852,7 +865,10 @@ fn concurrency_racing_nodes_never_share_an_epoch() {
     for (resource, epoch, owner) in &state.accepted {
         // One writer per (resource, epoch)…
         let seen = owner_of.entry((resource.clone(), *epoch)).or_insert(*owner);
-        assert_eq!(seen, owner, "two owners wrote {resource:?} at epoch {epoch}");
+        assert_eq!(
+            seen, owner,
+            "two owners wrote {resource:?} at epoch {epoch}"
+        );
         // …and accepted epochs never go backwards.
         let last = last_epoch.entry(resource.clone()).or_insert(0);
         assert!(*epoch >= *last);
@@ -956,7 +972,10 @@ fn std_shard_keys_and_shard_assignment() {
     }
     assert_eq!(used.len(), 16);
     // Golden value: nodes of different versions must agree on the shard of a key.
-    assert_eq!(shard_of(b"a", 64), u32::try_from(0x02c0_bdbf_4814_20f8_u64 % 64).unwrap());
+    assert_eq!(
+        shard_of(b"a", 64),
+        u32::try_from(0x02c0_bdbf_4814_20f8_u64 % 64).unwrap()
+    );
 }
 
 #[test]
@@ -1014,7 +1033,10 @@ fn std_claim_renew_advance_release() {
     assert_eq!(release(&mut store, &token), Ok(true));
     assert_eq!(release(&mut store, &token), Ok(false));
     let after = lease(&mut store, 3);
-    assert_eq!((after.holder, after.expires_at_ms, after.cursor_ms), (None, 0, 800));
+    assert_eq!(
+        (after.holder, after.expires_at_ms, after.cursor_ms),
+        (None, 0, 800)
+    );
 }
 
 #[test]
@@ -1065,7 +1087,9 @@ fn std_released_lease_can_be_claimed_at_once() {
     // The same instance re-claiming after its own expiry also gets a new term.
     let third = claim(&mut store, 0, &node(2), 5_000, TTL).unwrap();
     assert_eq!(third.term, 3);
-    assert!(renew(&mut store, &second, 5_001, TTL).unwrap_err().is_fenced());
+    assert!(renew(&mut store, &second, 5_001, TTL)
+        .unwrap_err()
+        .is_fenced());
 }
 
 #[test]
@@ -1209,9 +1233,12 @@ fn edge_lease_term_overflow_and_saturating_expiry() {
 #[test]
 fn anomalous_store_failures_surface_from_every_lease_operation() {
     let mut store = MemoryLeaseStore::new();
-    let unavailable = |r: Result<(), ClusterError>| matches!(r, Err(ClusterError::StoreUnavailable(_)));
+    let unavailable =
+        |r: Result<(), ClusterError>| matches!(r, Err(ClusterError::StoreUnavailable(_)));
     store.fail_next(1);
-    assert!(unavailable(claim(&mut store, 0, &node(1), 0, TTL).map(|_| ())));
+    assert!(unavailable(
+        claim(&mut store, 0, &node(1), 0, TTL).map(|_| ())
+    ));
     let token = claim(&mut store, 0, &node(1), 0, TTL).unwrap();
     store.fail_next(1);
     assert!(unavailable(renew(&mut store, &token, 1, TTL).map(|_| ())));
@@ -1257,17 +1284,17 @@ fn std_scheduler_claims_renews_and_releases_with_placement() {
     assert!(events
         .iter()
         .all(|e| matches!(e, SchedEvent::Claimed(t) if t.term == 1 && t.holder == node(1))));
-    assert_eq!(scheduler.held_shards().collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+    assert_eq!(
+        scheduler.held_shards().collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
     assert_eq!(scheduler.token(2).map(|t| t.term), Some(1));
 
     // Far from expiry: nothing to do.
     assert!(scheduler.tick(900, &alone, &mut store).is_empty());
     // Within `renew_before_ms` of expiry: every lease is extended.
     let events = scheduler.tick(1_000, &alone, &mut store);
-    assert_eq!(
-        events,
-        (0..4).map(SchedEvent::Renewed).collect::<Vec<_>>()
-    );
+    assert_eq!(events, (0..4).map(SchedEvent::Renewed).collect::<Vec<_>>());
     assert_eq!(lease(&mut store, 0).expires_at_ms, 2_500);
 
     // A second node joins: the shards placement gives it are released, the rest stay.
@@ -1278,7 +1305,11 @@ fn std_scheduler_claims_renews_and_releases_with_placement() {
     let events = scheduler.tick(1_100, &both, &mut store);
     assert_eq!(
         events,
-        moved.iter().copied().map(SchedEvent::Released).collect::<Vec<_>>()
+        moved
+            .iter()
+            .copied()
+            .map(SchedEvent::Released)
+            .collect::<Vec<_>>()
     );
     for shard in &moved {
         assert_eq!(scheduler.token(*shard), None);
@@ -1288,7 +1319,9 @@ fn std_scheduler_claims_renews_and_releases_with_placement() {
     // Drain: a placement without this node releases everything.
     scheduler.tick(1_200, &even(&[2]), &mut store);
     assert_eq!(scheduler.held_shards().count(), 0);
-    assert!(scheduler.tick(1_300, &Placement::default(), &mut store).is_empty());
+    assert!(scheduler
+        .tick(1_300, &Placement::default(), &mut store)
+        .is_empty());
 }
 
 #[test]
@@ -1301,7 +1334,10 @@ fn std_scheduler_waits_for_the_previous_holder_to_expire() {
     // Node 2 believes it owns everything (node 1 looks dead to it), but the leases are live.
     assert!(second.tick(100, &even(&[2]), &mut store).is_empty());
     assert_eq!(second.held_shards().count(), 0);
-    assert_eq!(second.fire(100, &mut store, 0, 50), Err(ClusterError::NotHeld));
+    assert_eq!(
+        second.fire(100, &mut store, 0, 50),
+        Err(ClusterError::NotHeld)
+    );
 
     // After expiry it takes over with a higher term.
     let events = second.tick(1_500, &even(&[2]), &mut store);
@@ -1315,7 +1351,10 @@ fn std_scheduler_waits_for_the_previous_holder_to_expire() {
     assert_eq!(events, (0..4).map(SchedEvent::Lost).collect::<Vec<_>>());
     assert_eq!(first.held_shards().count(), 0);
     // It may not fire in the meantime either.
-    assert_eq!(first.fire(1_600, &mut store, 0, 1_000), Err(ClusterError::NotHeld));
+    assert_eq!(
+        first.fire(1_600, &mut store, 0, 1_000),
+        Err(ClusterError::NotHeld)
+    );
     // And it cannot grab them back while node 2's leases are live.
     assert!(first.tick(1_700, &even(&[1]), &mut store).is_empty());
 }
@@ -1347,7 +1386,9 @@ fn std_scheduler_fire_commits_windows_and_drops_fenced_leases() {
     let other = claim(&mut store, 2, &node(2), 1_500, TTL).unwrap();
     assert_eq!(
         first.fire(1_501, &mut store, 2, 1_400),
-        Err(ClusterError::Fenced { current: other.term })
+        Err(ClusterError::Fenced {
+            current: other.term
+        })
     );
     assert_eq!(first.token(2), None);
 

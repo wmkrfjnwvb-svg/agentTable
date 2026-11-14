@@ -68,18 +68,25 @@ pub fn validate(msg: &Message) -> Result<(), ClusterError> {
     }
 }
 
+/// Largest encoding of one [`Update`]: two 10-byte varints for the node id and incarnation,
+/// a 2-byte length plus the address, a 10-byte version, 1 byte of state and a 3-byte weight.
+const MAX_UPDATE_BYTES: usize = 36 + MAX_ADDR_BYTES;
+
+/// Largest frame a message that passes [`validate`] can encode to (a `PingReq` with
+/// [`MAX_UPDATES`] updates): wire version, variant, sequence number, target, list length and
+/// the updates.
+pub const MAX_ENCODED_BYTES: usize =
+    1 + 1 + 10 + MAX_UPDATE_BYTES + 3 + MAX_UPDATES * MAX_UPDATE_BYTES;
+
+// Compile-time proof that every valid message fits a frame, so `encode` cannot produce
+// something `decode` refuses for its size.
+const _: () = assert!(MAX_ENCODED_BYTES <= MAX_FRAME_BYTES);
+
 /// Encodes a message into a frame.
 pub fn encode(msg: &Message) -> Result<Vec<u8>, ClusterError> {
     validate(msg)?;
-    let frame = postcard::to_extend(msg, vec![WIRE_VERSION])
-        .map_err(|e| ClusterError::Malformed(e.to_string()))?;
-    if frame.len() > MAX_FRAME_BYTES {
-        return Err(ClusterError::FrameTooLarge {
-            len: frame.len(),
-            max: MAX_FRAME_BYTES,
-        });
-    }
-    Ok(frame)
+    // No size check is needed here: see `MAX_ENCODED_BYTES`.
+    postcard::to_extend(msg, vec![WIRE_VERSION]).map_err(|e| ClusterError::Malformed(e.to_string()))
 }
 
 /// Decodes one frame into a message, enforcing every limit.

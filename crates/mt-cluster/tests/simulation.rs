@@ -560,3 +560,116 @@ fn same_seed_replays_identically() {
     assert_eq!(run(42), run(42));
     assert_ne!(run(42).2, run(43).2);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The harness itself: a simulator that silently misbehaves would make every result above
+// meaningless, so its own rules are tested too.
+// ---------------------------------------------------------------------------------------------
+
+fn packet(from: u64, to: &str) -> mt_cluster::sim::Packet {
+    mt_cluster::sim::Packet {
+        from: NodeId::new(from, 1, format!("n{from}")),
+        to: to.to_owned(),
+        bytes: vec![1, 2, 3],
+    }
+}
+
+#[test]
+fn harness_network_delays_partitions_and_heals() {
+    use mt_cluster::rng::Rng;
+    use mt_cluster::sim::SimNet;
+    let mut rng = Rng::new(1);
+    let mut net = SimNet::new(NetConfig::default());
+    assert_eq!(net.in_flight(), 0);
+
+    // Delivery happens after the configured delay (1..=20 ms), never before.
+    net.send(100, &mut rng, packet(0, "n1"));
+    assert_eq!((net.sent, net.dropped, net.in_flight()), (1, 0, 1));
+    assert_eq!(net.next_due(100), None);
+    assert_eq!(net.next_due(120), Some(packet(0, "n1")));
+    assert_eq!(net.next_due(10_000), None);
+
+    // A partition drops packets at send time…
+    net.set_group("n1", 1);
+    assert!(!net.connected("n0", "n1") && net.connected("n0", "n2"));
+    net.send(200, &mut rng, packet(0, "n1"));
+    assert_eq!((net.sent, net.dropped, net.in_flight()), (2, 1, 0));
+    // …and packets already in flight when it starts are dropped at delivery time.
+    net.heal();
+    net.send(300, &mut rng, packet(0, "n1"));
+    net.set_group("n0", 7);
+    assert_eq!(net.next_due(400), None);
+    assert_eq!((net.dropped, net.in_flight()), (2, 0));
+    net.heal();
+    assert!(net.connected("n0", "n1"));
+}
+
+#[test]
+fn harness_network_loses_and_duplicates_as_configured() {
+    use mt_cluster::rng::Rng;
+    use mt_cluster::sim::SimNet;
+    let mut rng = Rng::new(2);
+    let mut lossy = SimNet::new(NetConfig {
+        loss_per_mille: 1000,
+        ..NetConfig::default()
+    });
+    for _ in 0..50 {
+        lossy.send(0, &mut rng, packet(0, "n1"));
+    }
+    assert_eq!((lossy.sent, lossy.dropped, lossy.in_flight()), (50, 50, 0));
+
+    let mut doubling = SimNet::new(NetConfig {
+        duplicate_per_mille: 1000,
+        ..NetConfig::default()
+    });
+    for _ in 0..50 {
+        doubling.send(0, &mut rng, packet(0, "n1"));
+    }
+    assert_eq!(doubling.in_flight(), 100);
+    // Packets come out in time order.
+    let mut delivered = 0;
+    for now in 0..=20 {
+        while doubling.next_due(now).is_some() {
+            delivered += 1;
+        }
+    }
+    assert_eq!(delivered, 100);
+}
+
+#[test]
+fn harness_cluster_controls_behave() {
+    let mut c = SimCluster::new(5, 3, cfg(), calm());
+    c.run_for(5_000);
+    assert!(c.converged());
+    assert_eq!(c.up_nodes().len(), 3);
+
+    // Out-of-range indices are ignored rather than panicking mid-simulation.
+    c.crash(99);
+    c.restart(99);
+    c.leave(99);
+    c.input(99, mt_cluster::Input::Tick);
+    assert_eq!(c.nodes.len(), 3);
+
+    // A crashed node processes nothing; a restart is a new instance that keeps the
+    // recorded event history for later assertions.
+    let before = c.nodes[2].membership.me().clone();
+    let history = c.nodes[2].events.len();
+    assert!(history > 0);
+    c.crash(2);
+    assert_eq!(c.up_nodes().len(), 2);
+    c.input(2, mt_cluster::Input::Tick);
+    assert_eq!(c.nodes[2].events.len(), history);
+    c.restart(2);
+    let after = c.nodes[2].membership.me().clone();
+    assert_eq!(after.id, before.id);
+    assert!(after.incarnation > before.incarnation);
+    assert_eq!(c.nodes[2].events.len(), history);
+    c.run_for(20_000);
+    assert!(c.converged());
+
+    // A graceful leave takes the node out of everyone's view.
+    c.leave(1);
+    c.run_for(10_000);
+    assert!(c.converged());
+    assert_eq!(c.up_nodes().len(), 2);
+}

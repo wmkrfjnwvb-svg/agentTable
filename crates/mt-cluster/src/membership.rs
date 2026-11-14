@@ -152,7 +152,8 @@ struct Queued {
 
 #[derive(Debug, Clone)]
 struct Probe {
-    target: u64,
+    /// The exact instance that was pinged.
+    target: NodeId,
     seq: u64,
     sent_at: u64,
     indirect_sent: bool,
@@ -447,7 +448,7 @@ impl Membership {
             let elapsed = now.saturating_sub(p.sent_at);
             if elapsed >= self.cfg.probe_interval_ms {
                 self.probe = None;
-                self.suspect(now, p.target, out);
+                self.suspect(now, &p.target, out);
             } else if elapsed >= self.cfg.probe_timeout_ms && !p.indirect_sent {
                 self.indirect_probe(&p, out);
             }
@@ -463,15 +464,18 @@ impl Membership {
         }
     }
 
-    fn suspect(&mut self, now: u64, target: u64, out: &mut Vec<Output>) {
-        if let Some(m) = self.members.get(&target) {
-            if m.state == MemberState::Alive {
-                let u = Update {
-                    state: MemberState::Suspect,
-                    ..m.update()
-                };
-                self.apply(now, u, out);
-            }
+    /// Marks the probed instance as suspect if it is still the alive member of that id.
+    fn suspect(&mut self, now: u64, target: &NodeId, out: &mut Vec<Output>) {
+        let suspicion = self
+            .members
+            .get(&target.id)
+            .filter(|m| m.node == *target && m.state == MemberState::Alive)
+            .map(|m| Update {
+                state: MemberState::Suspect,
+                ..m.update()
+            });
+        if let Some(u) = suspicion {
+            self.apply(now, u, out);
         }
     }
 
@@ -479,10 +483,8 @@ impl Membership {
         if let Some(pr) = self.probe.as_mut() {
             pr.indirect_sent = true;
         }
-        let Some(target) = self.members.get(&p.target).map(|m| m.node.clone()) else {
-            return;
-        };
-        let mut helpers = self.active_ids(Some(p.target));
+        let target = p.target.clone();
+        let mut helpers = self.active_ids(Some(target.id));
         self.rng.shuffle(&mut helpers);
         for id in helpers.into_iter().take(self.cfg.indirect_probes) {
             if let Some(to) = self.addr_of(id) {
@@ -506,25 +508,25 @@ impl Membership {
             self.rng.shuffle(&mut self.probe_order);
         }
         while let Some(id) = self.probe_order.pop() {
-            let Some(to) = self
+            let Some(target) = self
                 .members
                 .get(&id)
                 .filter(|m| m.state.is_active())
-                .map(|m| m.node.addr.clone())
+                .map(|m| m.node.clone())
             else {
                 continue;
             };
             let seq = self.next_seq();
             let updates = self.gossip_for(Some(id));
+            out.push(Output::Send {
+                to: target.addr.clone(),
+                msg: Message::Ping { seq, updates },
+            });
             self.probe = Some(Probe {
-                target: id,
+                target,
                 seq,
                 sent_at: now,
                 indirect_sent: false,
-            });
-            out.push(Output::Send {
-                to,
-                msg: Message::Ping { seq, updates },
             });
             return;
         }
@@ -712,7 +714,12 @@ impl Membership {
                 }
             }
         }
-        if !u.state.is_active() && self.probe.as_ref().is_some_and(|p| p.target == u.node.id) {
+        // A probe is about one instance: drop it when that instance is gone or was replaced
+        // (the replacement was never pinged, so its silence would prove nothing).
+        let probe_is_moot = self.probe.as_ref().is_some_and(|p| {
+            p.target.id == u.node.id && (!u.state.is_active() || p.target != u.node)
+        });
+        if probe_is_moot {
             self.probe = None;
         }
         self.members.insert(

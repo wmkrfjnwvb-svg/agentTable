@@ -9,12 +9,15 @@
 )]
 
 use mt_cluster::auth::MIN_SECRET_BYTES;
-use mt_cluster::codec::{validate, MAX_ADDR_BYTES, MAX_FRAME_BYTES, MAX_UPDATES, MAX_WEIGHT, WIRE_VERSION};
+use mt_cluster::codec::{
+    validate, MAX_ADDR_BYTES, MAX_ENCODED_BYTES, MAX_FRAME_BYTES, MAX_UPDATES, MAX_WEIGHT,
+    WIRE_VERSION,
+};
 use mt_cluster::hash::{mix64, rendezvous_score, stable_hash64};
 use mt_cluster::message::Hello;
 use mt_cluster::{
-    decode, encode, ClusterError, ClusterSecret, Handshake, MemberState, Message, NodeId, ProtocolVersion, Update,
-    PROTOCOL_VERSION,
+    decode, encode, ClusterError, ClusterSecret, Handshake, MemberState, Message, NodeId,
+    ProtocolVersion, Update, PROTOCOL_VERSION,
 };
 use proptest::prelude::*;
 
@@ -23,7 +26,12 @@ fn node(id: u64) -> NodeId {
 }
 
 fn update(id: u64, state: MemberState) -> Update {
-    Update { node: node(id), version: id, state, weight: 1 }
+    Update {
+        node: node(id),
+        version: id,
+        state,
+        weight: 1,
+    }
 }
 
 fn secret() -> ClusterSecret {
@@ -35,17 +43,44 @@ fn other_secret() -> ClusterSecret {
 }
 
 fn every_message() -> Vec<Message> {
-    let hello = Hello { protocol: PROTOCOL_VERSION, node: node(1), nonce: [7; 16], tag: [9; 32] };
+    let hello = Hello {
+        protocol: PROTOCOL_VERSION,
+        node: node(1),
+        nonce: [7; 16],
+        tag: [9; 32],
+    };
     vec![
         Message::Hello(hello.clone()),
         Message::HelloAck(hello),
         Message::HelloConfirm { tag: [3; 32] },
-        Message::Ping { seq: 1, updates: vec![] },
-        Message::Ping { seq: u64::MAX, updates: vec![update(1, MemberState::Alive), update(2, MemberState::Suspect)] },
-        Message::Ack { seq: 2, updates: vec![update(3, MemberState::Dead)] },
-        Message::PingReq { seq: 3, target: node(4), updates: vec![update(5, MemberState::Left)] },
-        Message::Sync { want_reply: true, updates: vec![update(6, MemberState::Alive)] },
-        Message::Sync { want_reply: false, updates: vec![] },
+        Message::Ping {
+            seq: 1,
+            updates: vec![],
+        },
+        Message::Ping {
+            seq: u64::MAX,
+            updates: vec![
+                update(1, MemberState::Alive),
+                update(2, MemberState::Suspect),
+            ],
+        },
+        Message::Ack {
+            seq: 2,
+            updates: vec![update(3, MemberState::Dead)],
+        },
+        Message::PingReq {
+            seq: 3,
+            target: node(4),
+            updates: vec![update(5, MemberState::Left)],
+        },
+        Message::Sync {
+            want_reply: true,
+            updates: vec![update(6, MemberState::Alive)],
+        },
+        Message::Sync {
+            want_reply: false,
+            updates: vec![],
+        },
     ]
 }
 
@@ -66,9 +101,19 @@ fn std_protocol_versions_are_compatible_within_a_major() {
 fn std_node_ids_display_and_order_by_id_then_incarnation() {
     let a = NodeId::new(1, 5, "x");
     assert_eq!(a.to_string(), "1#5@x");
-    let mut nodes = vec![NodeId::new(2, 1, "a"), NodeId::new(1, 9, "b"), NodeId::new(1, 2, "z")];
+    let mut nodes = [
+        NodeId::new(2, 1, "a"),
+        NodeId::new(1, 9, "b"),
+        NodeId::new(1, 2, "z"),
+    ];
     nodes.sort();
-    assert_eq!(nodes.iter().map(|n| (n.id, n.incarnation)).collect::<Vec<_>>(), vec![(1, 2), (1, 9), (2, 1)]);
+    assert_eq!(
+        nodes
+            .iter()
+            .map(|n| (n.id, n.incarnation))
+            .collect::<Vec<_>>(),
+        vec![(1, 2), (1, 9), (2, 1)]
+    );
 }
 
 #[test]
@@ -79,9 +124,18 @@ fn std_hash_golden_vectors_never_change() {
     assert_eq!(mix64(1), 0x5692_161d_100b_05e5);
     assert_eq!(stable_hash64(b""), 0xf52a_15e9_a9b5_e89b);
     assert_eq!(stable_hash64(b"a"), 0x02c0_bdbf_4814_20f8);
-    assert_eq!(stable_hash64(b"bas_01j9z3k5q8abcdefghjkmnpqrs"), 0xbdfa_22a6_39a9_9d51);
-    assert_eq!(rendezvous_score(stable_hash64(b"a"), 1, 0), 0xff21_dc13_4a13_a201);
-    assert_eq!(rendezvous_score(stable_hash64(b"a"), 2, 3), 0x7631_c78c_d57b_5c81);
+    assert_eq!(
+        stable_hash64(b"bas_01j9z3k5q8abcdefghjkmnpqrs"),
+        0xbdfa_22a6_39a9_9d51
+    );
+    assert_eq!(
+        rendezvous_score(stable_hash64(b"a"), 1, 0),
+        0xff21_dc13_4a13_a201
+    );
+    assert_eq!(
+        rendezvous_score(stable_hash64(b"a"), 2, 3),
+        0x7631_c78c_d57b_5c81
+    );
 }
 
 #[test]
@@ -108,10 +162,23 @@ fn std_wire_format_golden_frame() {
     // Changing the layout of a message breaks rolling upgrades; this pins it.
     let message = Message::Ping {
         seq: 7,
-        updates: vec![Update { node: NodeId::new(1, 2, "n1"), version: 3, state: MemberState::Suspect, weight: 4 }],
+        updates: vec![Update {
+            node: NodeId::new(1, 2, "n1"),
+            version: 3,
+            state: MemberState::Suspect,
+            weight: 4,
+        }],
     };
-    assert_eq!(encode(&message).unwrap(), vec![1, 3, 7, 1, 1, 2, 2, 110, 49, 3, 1, 4]);
-    assert_eq!(encode(&Message::HelloConfirm { tag: [9; 32] }).unwrap().len(), 34);
+    assert_eq!(
+        encode(&message).unwrap(),
+        vec![1, 3, 7, 1, 1, 2, 2, 110, 49, 3, 1, 4]
+    );
+    assert_eq!(
+        encode(&Message::HelloConfirm { tag: [9; 32] })
+            .unwrap()
+            .len(),
+        34
+    );
 }
 
 fn raw_frame(message: &Message) -> Vec<u8> {
@@ -121,14 +188,50 @@ fn raw_frame(message: &Message) -> Vec<u8> {
 #[test]
 fn invalid_structural_limits_are_enforced_on_encode_and_decode() {
     let long_addr = "x".repeat(MAX_ADDR_BYTES + 1);
-    let heavy = Update { weight: MAX_WEIGHT + 1, ..update(1, MemberState::Alive) };
+    let heavy = Update {
+        weight: MAX_WEIGHT + 1,
+        ..update(1, MemberState::Alive)
+    };
     let cases: Vec<(Message, &str)> = vec![
-        (Message::Ping { seq: 1, updates: vec![update(1, MemberState::Alive); MAX_UPDATES + 1] }, "too many updates"),
-        (Message::Ack { seq: 1, updates: vec![heavy] }, "weight too large"),
-        (Message::Sync { want_reply: false, updates: vec![Update { node: NodeId::new(1, 1, ""), ..update(1, MemberState::Alive) }] }, "empty node address"),
-        (Message::PingReq { seq: 1, target: NodeId::new(1, 1, long_addr.clone()), updates: vec![] }, "node address too long"),
         (
-            Message::Hello(Hello { protocol: PROTOCOL_VERSION, node: NodeId::new(1, 1, long_addr), nonce: [0; 16], tag: [0; 32] }),
+            Message::Ping {
+                seq: 1,
+                updates: vec![update(1, MemberState::Alive); MAX_UPDATES + 1],
+            },
+            "too many updates",
+        ),
+        (
+            Message::Ack {
+                seq: 1,
+                updates: vec![heavy],
+            },
+            "weight too large",
+        ),
+        (
+            Message::Sync {
+                want_reply: false,
+                updates: vec![Update {
+                    node: NodeId::new(1, 1, ""),
+                    ..update(1, MemberState::Alive)
+                }],
+            },
+            "empty node address",
+        ),
+        (
+            Message::PingReq {
+                seq: 1,
+                target: NodeId::new(1, 1, long_addr.clone()),
+                updates: vec![],
+            },
+            "node address too long",
+        ),
+        (
+            Message::Hello(Hello {
+                protocol: PROTOCOL_VERSION,
+                node: NodeId::new(1, 1, long_addr),
+                nonce: [0; 16],
+                tag: [0; 32],
+            }),
             "node address too long",
         ),
     ];
@@ -136,7 +239,10 @@ fn invalid_structural_limits_are_enforced_on_encode_and_decode() {
         assert_eq!(validate(&message), Err(ClusterError::LimitExceeded(reason)));
         assert_eq!(encode(&message), Err(ClusterError::LimitExceeded(reason)));
         // A peer that skips the checks cannot get the message past the decoder either.
-        assert_eq!(decode(&raw_frame(&message)), Err(ClusterError::LimitExceeded(reason)));
+        assert_eq!(
+            decode(&raw_frame(&message)),
+            Err(ClusterError::LimitExceeded(reason))
+        );
     }
 }
 
@@ -145,7 +251,12 @@ fn edge_limits_are_inclusive() {
     let at_limit = Message::Sync {
         want_reply: false,
         updates: vec![
-            Update { node: NodeId::new(1, 1, "x".repeat(MAX_ADDR_BYTES)), version: 0, state: MemberState::Alive, weight: MAX_WEIGHT };
+            Update {
+                node: NodeId::new(1, 1, "x".repeat(MAX_ADDR_BYTES)),
+                version: 0,
+                state: MemberState::Alive,
+                weight: MAX_WEIGHT
+            };
             MAX_UPDATES
         ],
     };
@@ -155,17 +266,57 @@ fn edge_limits_are_inclusive() {
 }
 
 #[test]
+fn edge_largest_valid_message_fits_a_frame() {
+    // Every integer at its widest encoding, every string at its longest, every list full.
+    let widest = NodeId::new(u64::MAX, u64::MAX, "x".repeat(MAX_ADDR_BYTES));
+    let update = Update {
+        node: widest.clone(),
+        version: u64::MAX,
+        state: MemberState::Left,
+        weight: MAX_WEIGHT,
+    };
+    let largest = Message::PingReq {
+        seq: u64::MAX,
+        target: widest,
+        updates: vec![update; MAX_UPDATES],
+    };
+    let frame = encode(&largest).unwrap();
+    assert_eq!(frame.len(), 166_052);
+    assert!(frame.len() <= MAX_ENCODED_BYTES && MAX_ENCODED_BYTES <= MAX_FRAME_BYTES);
+    assert_eq!(decode(&frame).unwrap(), largest);
+}
+
+#[test]
 fn invalid_frames_are_rejected_with_the_right_error() {
     assert_eq!(decode(&[]), Err(ClusterError::EmptyFrame));
-    assert_eq!(decode(&[2, 0]), Err(ClusterError::UnsupportedWireVersion(2)));
+    assert_eq!(
+        decode(&[2, 0]),
+        Err(ClusterError::UnsupportedWireVersion(2))
+    );
     assert_eq!(decode(&[0]), Err(ClusterError::UnsupportedWireVersion(0)));
-    assert!(matches!(decode(&[WIRE_VERSION]), Err(ClusterError::Malformed(_))));
-    assert!(matches!(decode(&[WIRE_VERSION, 200]), Err(ClusterError::Malformed(_))));
-    let mut frame = encode(&Message::Ping { seq: 1, updates: vec![] }).unwrap();
+    assert!(matches!(
+        decode(&[WIRE_VERSION]),
+        Err(ClusterError::Malformed(_))
+    ));
+    assert!(matches!(
+        decode(&[WIRE_VERSION, 200]),
+        Err(ClusterError::Malformed(_))
+    ));
+    let mut frame = encode(&Message::Ping {
+        seq: 1,
+        updates: vec![],
+    })
+    .unwrap();
     frame.push(0);
     assert_eq!(decode(&frame), Err(ClusterError::TrailingBytes));
     let oversized = vec![WIRE_VERSION; MAX_FRAME_BYTES + 1];
-    assert_eq!(decode(&oversized), Err(ClusterError::FrameTooLarge { len: MAX_FRAME_BYTES + 1, max: MAX_FRAME_BYTES }));
+    assert_eq!(
+        decode(&oversized),
+        Err(ClusterError::FrameTooLarge {
+            len: MAX_FRAME_BYTES + 1,
+            max: MAX_FRAME_BYTES
+        })
+    );
 }
 
 #[test]
@@ -173,20 +324,34 @@ fn edge_truncated_frames_never_decode() {
     for message in every_message() {
         let frame = encode(&message).unwrap();
         for cut in 0..frame.len() {
-            assert!(decode(&frame[..cut]).is_err(), "prefix of length {cut} decoded");
+            assert!(
+                decode(&frame[..cut]).is_err(),
+                "prefix of length {cut} decoded"
+            );
         }
     }
 }
 
 fn arb_update() -> impl Strategy<Value = Update> {
-    (any::<u64>(), any::<u64>(), "[a-z0-9.:]{1,20}", any::<u64>(), 0_u8..4, 0..=MAX_WEIGHT).prop_map(
-        |(id, incarnation, addr, version, state, weight)| Update {
+    (
+        any::<u64>(),
+        any::<u64>(),
+        "[a-z0-9.:]{1,20}",
+        any::<u64>(),
+        0_u8..4,
+        0..=MAX_WEIGHT,
+    )
+        .prop_map(|(id, incarnation, addr, version, state, weight)| Update {
             node: NodeId::new(id, incarnation, addr),
             version,
-            state: [MemberState::Alive, MemberState::Suspect, MemberState::Dead, MemberState::Left][usize::from(state)],
+            state: [
+                MemberState::Alive,
+                MemberState::Suspect,
+                MemberState::Dead,
+                MemberState::Left,
+            ][usize::from(state)],
             weight,
-        },
-    )
+        })
 }
 
 fn arb_message() -> impl Strategy<Value = Message> {
@@ -194,12 +359,33 @@ fn arb_message() -> impl Strategy<Value = Message> {
     prop_oneof![
         (any::<u64>(), updates()).prop_map(|(seq, updates)| Message::Ping { seq, updates }),
         (any::<u64>(), updates()).prop_map(|(seq, updates)| Message::Ack { seq, updates }),
-        (any::<u64>(), arb_update(), updates()).prop_map(|(seq, target, updates)| Message::PingReq { seq, target: target.node, updates }),
-        (any::<bool>(), updates()).prop_map(|(want_reply, updates)| Message::Sync { want_reply, updates }),
-        any::<[u8; 32]>().prop_map(|tag| Message::HelloConfirm { tag }),
-        (arb_update(), any::<[u8; 16]>(), any::<[u8; 32]>(), any::<u16>(), any::<u16>()).prop_map(|(u, nonce, tag, major, minor)| {
-            Message::Hello(Hello { protocol: ProtocolVersion { major, minor }, node: u.node, nonce, tag })
+        (any::<u64>(), arb_update(), updates()).prop_map(|(seq, target, updates)| {
+            Message::PingReq {
+                seq,
+                target: target.node,
+                updates,
+            }
         }),
+        (any::<bool>(), updates()).prop_map(|(want_reply, updates)| Message::Sync {
+            want_reply,
+            updates
+        }),
+        any::<[u8; 32]>().prop_map(|tag| Message::HelloConfirm { tag }),
+        (
+            arb_update(),
+            any::<[u8; 16]>(),
+            any::<[u8; 32]>(),
+            any::<u16>(),
+            any::<u16>()
+        )
+            .prop_map(|(u, nonce, tag, major, minor)| {
+                Message::Hello(Hello {
+                    protocol: ProtocolVersion { major, minor },
+                    node: u.node,
+                    nonce,
+                    tag,
+                })
+            }),
     ]
 }
 
@@ -236,13 +422,20 @@ proptest! {
 // ---------------------------------------------------------------------------------------------
 
 /// Runs a full handshake through the codec; returns both sides.
-fn handshake(initiator_secret: ClusterSecret, responder_secret: ClusterSecret) -> Result<(Handshake, Handshake), ClusterError> {
+fn handshake(
+    initiator_secret: ClusterSecret,
+    responder_secret: ClusterSecret,
+) -> Result<(Handshake, Handshake), ClusterError> {
     let (mut initiator, hello) = Handshake::initiator(initiator_secret, node(1), [1; 16])?;
     let mut responder = Handshake::responder(responder_secret, node(2), [2; 16]);
     let hello = decode(&encode(&hello)?)?;
-    let ack = responder.handle(&hello)?.ok_or(ClusterError::UnexpectedHandshake)?;
+    let ack = responder
+        .handle(&hello)?
+        .ok_or(ClusterError::UnexpectedHandshake)?;
     let ack = decode(&encode(&ack)?)?;
-    let confirm = initiator.handle(&ack)?.ok_or(ClusterError::UnexpectedHandshake)?;
+    let confirm = initiator
+        .handle(&ack)?
+        .ok_or(ClusterError::UnexpectedHandshake)?;
     let confirm = decode(&encode(&confirm)?)?;
     assert_eq!(responder.handle(&confirm)?, None);
     Ok((initiator, responder))
@@ -272,7 +465,10 @@ fn std_peer_is_unknown_until_the_handshake_completes() {
 
 #[test]
 fn invalid_wrong_secret_fails_on_either_side() {
-    assert_eq!(handshake(secret(), other_secret()).err(), Some(ClusterError::AuthFailed));
+    assert_eq!(
+        handshake(secret(), other_secret()).err(),
+        Some(ClusterError::AuthFailed)
+    );
     // The initiator also rejects an ack made with another secret.
     let (mut initiator, hello) = Handshake::initiator(secret(), node(1), [1; 16]).unwrap();
     let (_, forged_hello) = Handshake::initiator(other_secret(), node(1), [1; 16]).unwrap();
@@ -283,11 +479,16 @@ fn invalid_wrong_secret_fails_on_either_side() {
     let _ = hello;
 }
 
+/// An edit applied to a handshake message in transit.
+type Tamper = Box<dyn Fn(&mut Hello)>;
+
 #[test]
 fn invalid_tampered_hello_fields_fail_authentication() {
     let (_, hello) = Handshake::initiator(secret(), node(1), [1; 16]).unwrap();
-    let Message::Hello(original) = hello else { panic!("expected Hello") };
-    let tamper: Vec<Box<dyn Fn(&mut Hello)>> = vec![
+    let Message::Hello(original) = hello else {
+        panic!("expected Hello")
+    };
+    let tamper: Vec<Tamper> = vec![
         Box::new(|h| h.tag[0] ^= 1),
         Box::new(|h| h.nonce[15] ^= 1),
         Box::new(|h| h.node.id = 3),
@@ -299,7 +500,10 @@ fn invalid_tampered_hello_fields_fail_authentication() {
         let mut hello = original.clone();
         edit(&mut hello);
         let mut responder = Handshake::responder(secret(), node(2), [2; 16]);
-        assert_eq!(responder.handle(&Message::Hello(hello)), Err(ClusterError::AuthFailed));
+        assert_eq!(
+            responder.handle(&Message::Hello(hello)),
+            Err(ClusterError::AuthFailed)
+        );
     }
 }
 
@@ -325,31 +529,60 @@ fn invalid_replayed_messages_do_not_authenticate() {
 #[test]
 fn invalid_out_of_order_messages_fail_and_the_handshake_stays_failed() {
     let (mut initiator, hello) = Handshake::initiator(secret(), node(1), [1; 16]).unwrap();
-    assert_eq!(initiator.handle(&hello), Err(ClusterError::UnexpectedHandshake));
+    assert_eq!(
+        initiator.handle(&hello),
+        Err(ClusterError::UnexpectedHandshake)
+    );
     // After any error the state machine is dead: even a valid ack is refused.
     let mut responder = Handshake::responder(secret(), node(2), [2; 16]);
     let ack = responder.handle(&hello).unwrap().unwrap();
-    assert_eq!(initiator.handle(&ack), Err(ClusterError::UnexpectedHandshake));
+    assert_eq!(
+        initiator.handle(&ack),
+        Err(ClusterError::UnexpectedHandshake)
+    );
 
     let mut responder = Handshake::responder(secret(), node(2), [2; 16]);
-    assert_eq!(responder.handle(&Message::Ping { seq: 1, updates: vec![] }), Err(ClusterError::UnexpectedHandshake));
+    assert_eq!(
+        responder.handle(&Message::Ping {
+            seq: 1,
+            updates: vec![]
+        }),
+        Err(ClusterError::UnexpectedHandshake)
+    );
     let mut responder = Handshake::responder(secret(), node(2), [2; 16]);
     responder.handle(&hello).unwrap();
-    assert_eq!(responder.handle(&hello), Err(ClusterError::UnexpectedHandshake));
+    assert_eq!(
+        responder.handle(&hello),
+        Err(ClusterError::UnexpectedHandshake)
+    );
 
     let (mut done_initiator, mut done_responder) = handshake(secret(), secret()).unwrap();
-    assert_eq!(done_initiator.handle(&ack), Err(ClusterError::UnexpectedHandshake));
-    assert_eq!(done_responder.handle(&hello), Err(ClusterError::UnexpectedHandshake));
+    assert_eq!(
+        done_initiator.handle(&ack),
+        Err(ClusterError::UnexpectedHandshake)
+    );
+    assert_eq!(
+        done_responder.handle(&hello),
+        Err(ClusterError::UnexpectedHandshake)
+    );
     assert_eq!(done_responder.peer(), None);
 }
 
 #[test]
 fn invalid_incompatible_protocol_and_self_connection() {
-    let foreign = Hello { protocol: ProtocolVersion { major: 2, minor: 0 }, node: node(1), nonce: [1; 16], tag: [0; 32] };
+    let foreign = Hello {
+        protocol: ProtocolVersion { major: 2, minor: 0 },
+        node: node(1),
+        nonce: [1; 16],
+        tag: [0; 32],
+    };
     let mut responder = Handshake::responder(secret(), node(2), [2; 16]);
     assert_eq!(
         responder.handle(&Message::Hello(foreign)),
-        Err(ClusterError::IncompatibleProtocol { ours: PROTOCOL_VERSION, theirs: ProtocolVersion { major: 2, minor: 0 } })
+        Err(ClusterError::IncompatibleProtocol {
+            ours: PROTOCOL_VERSION,
+            theirs: ProtocolVersion { major: 2, minor: 0 }
+        })
     );
     // A node that reaches itself (same stable id) refuses the connection.
     let (_, hello) = Handshake::initiator(secret(), node(2), [1; 16]).unwrap();
@@ -359,13 +592,22 @@ fn invalid_incompatible_protocol_and_self_connection() {
     let mut twin = Handshake::responder(secret(), node(1), [2; 16]);
     let (_, hello_from_other) = Handshake::initiator(secret(), node(3), [1; 16]).unwrap();
     let ack_from_twin = twin.handle(&hello_from_other).unwrap().unwrap();
-    assert_eq!(initiator.handle(&ack_from_twin), Err(ClusterError::SelfConnection));
+    assert_eq!(
+        initiator.handle(&ack_from_twin),
+        Err(ClusterError::SelfConnection)
+    );
 }
 
 #[test]
 fn invalid_short_secrets_are_refused_and_secrets_never_print() {
-    assert_eq!(ClusterSecret::new(&[1; MIN_SECRET_BYTES - 1]).err(), Some(ClusterError::SecretTooShort));
-    assert_eq!(ClusterSecret::new(b"").err(), Some(ClusterError::SecretTooShort));
+    assert_eq!(
+        ClusterSecret::new(&[1; MIN_SECRET_BYTES - 1]).err(),
+        Some(ClusterError::SecretTooShort)
+    );
+    assert_eq!(
+        ClusterSecret::new(b"").err(),
+        Some(ClusterError::SecretTooShort)
+    );
     let secret = ClusterSecret::new(&[b'k'; MIN_SECRET_BYTES]).unwrap();
     let printed = format!("{secret:?}");
     assert_eq!(printed, "ClusterSecret(<redacted>)");
@@ -385,7 +627,10 @@ fn std_errors_have_messages_and_fenced_is_detectable() {
         ClusterError::Malformed("x".into()),
         ClusterError::TrailingBytes,
         ClusterError::LimitExceeded("y"),
-        ClusterError::IncompatibleProtocol { ours: PROTOCOL_VERSION, theirs: PROTOCOL_VERSION },
+        ClusterError::IncompatibleProtocol {
+            ours: PROTOCOL_VERSION,
+            theirs: PROTOCOL_VERSION,
+        },
         ClusterError::AuthFailed,
         ClusterError::UnexpectedHandshake,
         ClusterError::SelfConnection,
