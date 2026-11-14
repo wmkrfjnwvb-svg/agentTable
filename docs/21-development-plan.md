@@ -8,9 +8,9 @@
 | Rule | Detail |
 |---|---|
 | Waves | Work is done in dependency-ordered waves. Each wave ends with: all tests green, both audits run, findings fixed or logged, commit |
-| Builder agents | One agent per crate (or small crate group). Each owns only its crate directory |
-| **Requirements audit agent** | After each wave: checks the code against docs 17–20 (features, limits, acceptance criteria) and reports gaps as `docs/audit/requirements-wave-N.md` |
-| **Logic audit agent** | After each wave: reviews business logic and reasoning (invariants, edge cases, money/time/permission correctness, concurrency hazards) and reports as `docs/audit/logic-wave-N.md` |
+| Builders | All code, tests and simulations are written directly by the lead, one crate at a time (decision of 2026-11-14: no builder agents) |
+| **Requirements audit** | A separate review pass after each wave: checks the code against docs 17–20 (features, limits, acceptance criteria) and reports gaps as `docs/audit/requirements-wave-N.md` |
+| **Logic audit** | A separate review pass after each wave: reviews business logic and reasoning (invariants, edge cases, money/time/permission correctness, concurrency hazards) and reports as `docs/audit/logic-wave-N.md` |
 | Test categories (every crate) | standard · anomalous · edge · invalid · concurrency · cross-platform (pure crates also build for `wasm32-unknown-unknown`) |
 | Test techniques | unit + property tests (`proptest`), golden vectors, model-based tests for state machines, deterministic simulation (§4), DB tests on SQLite + MySQL + PostgreSQL |
 | Lints | Workspace lints: `unsafe_code = forbid`; no wildcard enum match arms; no `unwrap`/`expect`/`panic` in non-test code; checked arithmetic |
@@ -22,8 +22,8 @@
 |---|---|---|
 | **W0** | workspace, lints, `xtask`, dev DB scripts | Scaffold |
 | **W1** | `mt-core`, `mt-cluster`, `mt-audit` (+ trace types) | Values, field types, validation library, sort keys, provenance; cluster membership/placement/fencing with simulation; hash-chained audit |
-| **W2** | `mt-refdata`, `mt-query`, `mt-formula`, `mt-perm`, `mt-lifecycle` | Pure business engines (native + WASM) |
-| **W3** | `mt-ops`, `mt-store` (3 dialects, DB per tenant), `mt-sim` (whole-system simulator) | Operation pipeline on real databases; simulated multi-node, multi-client runs |
+| **W2** | `mt-core` completion (condition type, computed facet, field-type registry, group visibility and capability — audit items R1-07…R1-09), `mt-refdata`, `mt-query`, `mt-formula`, `mt-perm`, `mt-lifecycle` | Pure business engines (native + WASM) |
+| **W3** | `mt-ops`, `mt-store` (3 dialects, DB per tenant), job queue with leases (R1-10), `mt-sim` (whole-system simulator) | Operation pipeline on real databases; simulated multi-node, multi-client runs |
 | **W4** | `mt-identity`, `mt-api` (Public + Admin, OpenAPI), `mt-server` (single binary, cluster roles) | Running server |
 | **W5** | `mt-rules`, `mt-workflow`, `mt-notify`, `mt-integrate` | Process automation and connections |
 | **W6** | `mt-metrics`, `mt-templates`, `mt-ai`, `mt-ai-eval`, `mt-mcp` | Analytics, templates, AI |
