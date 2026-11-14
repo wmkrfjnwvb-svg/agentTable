@@ -511,6 +511,33 @@ pub fn validate_cross_field<'a>(
     out
 }
 
+/// Checks the field's conditional requirement (`required_when`): the value must not be empty
+/// while the condition holds for the record. `other_value` returns the value of another field
+/// of the same record.
+#[must_use]
+pub fn validate_required_when<'a>(
+    field: &FieldDef,
+    value: &Value,
+    other_value: &dyn Fn(FieldId) -> Option<&'a Value>,
+    ctx: &dyn crate::condition::Context,
+) -> Vec<ValidationIssue> {
+    let required = value.is_empty()
+        && field
+            .validation
+            .required_when
+            .as_ref()
+            .is_some_and(|condition| condition.evaluate(other_value, ctx));
+    if required {
+        vec![issue(
+            field,
+            IssueCode::Required,
+            format!("`{}` is required for this record", field.name),
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Checks a cascading field against its parent field (see
 /// [`OptionsSource::RefSet`]`::cascade_from`): every selected item must be a descendant of the
 /// item chosen in the parent field. `other_value` returns the value of another field of the
@@ -1223,5 +1250,37 @@ mod tests {
             &AcceptAllOptions
         )
         .is_empty());
+    }
+    #[test]
+    fn std_conditional_requirement() {
+        use crate::condition::{Condition, Operator, UtcContext};
+        let ctx = UtcContext::on(Date::from_ymd(2026, 1, 1).unwrap());
+        let mut approver = field_of(DataType::Text);
+        approver.validation.required_when = Some(Condition::compare(
+            fid(2),
+            Operator::Gt,
+            Value::Number(dec("10000")),
+        ));
+        let big = Value::Number(dec("10000.01"));
+        let limit = Value::Number(dec("10000"));
+        let name = Value::Text("Kim".into());
+        let run = |value: &Value, amount: Option<&Value>| {
+            let lookup = |f: FieldId| if f == fid(2) { amount } else { None };
+            codes(&validate_required_when(&approver, value, &lookup, &ctx))
+        };
+        // Required exactly while the condition holds and the value is empty.
+        assert_eq!(run(&Value::Null, Some(&big)), vec![IssueCode::Required]);
+        assert_eq!(
+            run(&Value::Text("  ".into()), Some(&big)),
+            vec![IssueCode::Required]
+        );
+        assert!(run(&name, Some(&big)).is_empty());
+        assert!(run(&Value::Null, Some(&limit)).is_empty());
+        assert!(run(&Value::Null, None).is_empty());
+        // A field without a conditional requirement never reports one.
+        let plain = field_of(DataType::Text);
+        assert!(validate_required_when(&plain, &Value::Null, &|_| Some(&big), &ctx).is_empty());
+        // The unconditional check does not know about the condition.
+        assert!(check(&approver, &Value::Null).is_empty());
     }
 }

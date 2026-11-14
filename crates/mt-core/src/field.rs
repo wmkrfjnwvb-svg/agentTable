@@ -13,6 +13,7 @@
 //! is not attached to a text field). Checking a *value* against a definition is done by
 //! [`crate::validate`].
 
+use crate::condition::{Condition, Context};
 use crate::decimal::Decimal;
 use crate::error::{clip, CoreError};
 use crate::format::FormatId;
@@ -20,6 +21,7 @@ use crate::id::{FieldGroupId, FieldId, FieldLibraryItemId, RefItemId, RefSetId, 
 use crate::money::Currency;
 use crate::numbering::NumberingPattern;
 use crate::pattern::TextPattern;
+use crate::value::Value;
 use core::fmt;
 use core::str::FromStr;
 use std::collections::BTreeMap;
@@ -687,6 +689,10 @@ pub struct ValidationSpec {
     /// Comparisons with other fields of the same record.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cross_field: Vec<CrossFieldRule>,
+    /// The value must not be empty while this condition holds for the record
+    /// ("an approver is required once the amount exceeds 10 000").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_when: Option<Condition>,
 }
 
 /// The definition of one field.
@@ -879,6 +885,54 @@ impl FieldDef {
                 return Err(invalid(format!(
                     "role {role} cannot be given to a {} field",
                     self.data_type
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Verifies everything that needs the other fields of the table: the conditional
+    /// requirement, the cross-field rules and the cascade parent. `type_of` returns the data
+    /// type of a field of the same table. Call it after [`FieldDef::check`], and again for
+    /// every field that refers to a field whose type changed.
+    ///
+    /// # Errors
+    /// [`CoreError::InvalidDefinition`] describing the first inconsistency found.
+    pub fn check_in_table(
+        &self,
+        type_of: &dyn Fn(FieldId) -> Option<DataType>,
+    ) -> Result<(), CoreError> {
+        let t = self.data_type;
+        if let Some(condition) = &self.validation.required_when {
+            if condition.fields().contains(&self.id) {
+                return Err(invalid(
+                    "a conditional requirement cannot depend on the field it applies to",
+                ));
+            }
+            condition.check(type_of)?;
+        }
+        for rule in &self.validation.cross_field {
+            let other = type_of(rule.other).ok_or_else(|| {
+                invalid(format!(
+                    "a cross-field rule uses the unknown field {}",
+                    rule.other
+                ))
+            })?;
+            if other != t && !(other.is_text() && t.is_text()) {
+                return Err(invalid(format!(
+                    "a {t} field cannot be compared with a {other} field"
+                )));
+            }
+        }
+        if let Some(parent) = self.options.cascade_from() {
+            let parent_type = type_of(parent).ok_or_else(|| {
+                invalid(format!(
+                    "the cascade parent {parent} is not a field of the table"
+                ))
+            })?;
+            if parent_type != DataType::Reference {
+                return Err(invalid(format!(
+                    "a cascade parent must be a single-choice reference field, not a {parent_type} field"
                 )));
             }
         }
@@ -1094,6 +1148,18 @@ impl FieldDef {
         {
             return Err(invalid(format!("a {t} field cannot be unique")));
         }
+        if v.required_when.is_some() {
+            if v.required {
+                return Err(invalid(
+                    "the field is always required; remove the conditional requirement",
+                ));
+            }
+            if self.is_generated() {
+                return Err(invalid(
+                    "an auto-numbered field cannot be conditionally required",
+                ));
+            }
+        }
         for rule in &v.cross_field {
             if rule.other == self.id {
                 return Err(invalid("a cross-field rule compares the field with itself"));
@@ -1121,9 +1187,57 @@ pub struct FieldGroup {
     /// Optional description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The group is shown only while this condition holds for the record (always, if absent).
+    /// Hiding is presentation, not protection: a hidden group's fields keep their values and
+    /// stay readable through the API unless a capability says otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<Condition>,
 }
 
 impl FieldGroup {
+    /// Whether the group is shown for a record. `value_of` returns the value of a field of
+    /// the record.
+    #[must_use]
+    pub fn is_visible<'a>(
+        &self,
+        value_of: &dyn Fn(FieldId) -> Option<&'a Value>,
+        ctx: &dyn Context,
+    ) -> bool {
+        self.visible_when
+            .as_ref()
+            .is_none_or(|condition| condition.evaluate(value_of, ctx))
+    }
+
+    /// Verifies everything that needs the fields of the table: every member is a field of
+    /// the table and the visibility condition is well typed and does not depend on a member
+    /// of the group (a group that hides its own inputs could never be shown again).
+    ///
+    /// # Errors
+    /// [`CoreError::InvalidDefinition`].
+    pub fn check_in_table(
+        &self,
+        type_of: &dyn Fn(FieldId) -> Option<DataType>,
+    ) -> Result<(), CoreError> {
+        for field in &self.fields {
+            if type_of(*field).is_none() {
+                return Err(invalid(format!(
+                    "group `{}` lists the unknown field {field}",
+                    clip(&self.name)
+                )));
+            }
+        }
+        if let Some(condition) = &self.visible_when {
+            if condition.fields().iter().any(|f| self.fields.contains(f)) {
+                return Err(invalid(format!(
+                    "the visibility of group `{}` depends on one of its own fields",
+                    clip(&self.name)
+                )));
+            }
+            condition.check(type_of)?;
+        }
+        Ok(())
+    }
+
     /// Verifies the group: a valid name and no field listed twice.
     ///
     /// # Errors
@@ -1570,6 +1684,7 @@ mod tests {
             name: "Contact".into(),
             fields: vec![fid(1), fid(2)],
             description: None,
+            visible_when: None,
         };
         group.check().unwrap();
         let json = serde_json::to_string(&group).unwrap();
@@ -1739,5 +1854,142 @@ mod tests {
         let mut text = field_of(DataType::Text);
         text.options = OptionsSource::Parameter { key: "k".into() };
         assert!(reason(text.check()).contains("parameter option list cannot"));
+    }
+    /// Field types of a small table used by the table-context tests.
+    fn table_types(field: FieldId) -> Option<DataType> {
+        match field.as_u128() {
+            1 => Some(DataType::Text),
+            2 => Some(DataType::Number),
+            3 => Some(DataType::Reference),
+            4 => Some(DataType::MultiReference),
+            5 => Some(DataType::LongText),
+            6 => Some(DataType::Number),
+            _ => None,
+        }
+    }
+
+    fn over_ten_thousand() -> Condition {
+        use crate::condition::Operator;
+        Condition::compare(
+            fid(2),
+            Operator::Gt,
+            Value::Number(crate::value::testkit::dec("10000")),
+        )
+    }
+
+    #[test]
+    fn std_conditional_requirement_rules() {
+        let mut approver = FieldDef::new(fid(1), "Approver", DataType::Text);
+        approver.validation.required_when = Some(over_ten_thousand());
+        approver.check().unwrap();
+        approver.check_in_table(&table_types).unwrap();
+        let json = serde_json::to_string(&approver).unwrap();
+        assert_eq!(serde_json::from_str::<FieldDef>(&json).unwrap(), approver);
+
+        // Always required and conditionally required at once says the same thing twice.
+        approver.validation.required = true;
+        assert!(reason(approver.check()).contains("always required"));
+        approver.validation.required = false;
+
+        // The condition is checked against the table: unknown fields and wrong operators fail.
+        approver.validation.required_when = Some(Condition::is_empty(fid(99)));
+        assert!(reason(approver.check_in_table(&table_types)).contains("unknown field"));
+        // A requirement that depends on the field itself can never be satisfied sensibly.
+        approver.validation.required_when = Some(Condition::is_empty(fid(1)));
+        assert!(reason(approver.check_in_table(&table_types))
+            .contains("cannot depend on the field it applies to"));
+
+        let mut numbered = FieldDef::new(fid(1), "No.", DataType::Text);
+        numbered.format.numbering = Some(NumberingPattern::new("T-{seq}").unwrap());
+        numbered.validation.required_when = Some(over_ten_thousand());
+        assert!(reason(numbered.check()).contains("auto-numbered"));
+    }
+
+    #[test]
+    fn std_cross_field_rules_and_cascades_are_checked_against_the_table() {
+        let mut end = FieldDef::new(fid(2), "End", DataType::Number);
+        end.validation.cross_field = vec![CrossFieldRule {
+            comparison: Comparison::Ge,
+            other: fid(6),
+        }];
+        end.check().unwrap();
+        end.check_in_table(&table_types).unwrap();
+        end.validation.cross_field[0].other = fid(99);
+        assert!(reason(end.check_in_table(&table_types)).contains("unknown field"));
+        end.validation.cross_field[0].other = fid(1);
+        assert!(reason(end.check_in_table(&table_types))
+            .contains("number field cannot be compared with a text field"));
+        // Text and long text may be compared with each other.
+        let mut title = FieldDef::new(fid(1), "Title", DataType::Text);
+        title.validation.cross_field = vec![CrossFieldRule {
+            comparison: Comparison::Ne,
+            other: fid(5),
+        }];
+        title.check_in_table(&table_types).unwrap();
+
+        let cascade = |parent: u128| {
+            let mut city = field_of(DataType::Reference);
+            city.id = fid(50);
+            city.options = OptionsSource::RefSet {
+                set: RefSetId::from_u128(1),
+                subtree: None,
+                level: None,
+                leaves_only: false,
+                cascade_from: Some(fid(parent)),
+            };
+            city.check().unwrap();
+            city.check_in_table(&table_types)
+        };
+        cascade(3).unwrap();
+        assert!(reason(cascade(99)).contains("not a field of the table"));
+        // The parent must hold exactly one item, or "below the parent" would be ambiguous.
+        assert!(reason(cascade(4)).contains("single-choice reference field"));
+        assert!(reason(cascade(1)).contains("single-choice reference field"));
+        // A field without table-level facets always passes.
+        FieldDef::new(fid(1), "Plain", DataType::Text)
+            .check_in_table(&|_| None)
+            .unwrap();
+    }
+
+    #[test]
+    fn std_group_visibility() {
+        use crate::condition::UtcContext;
+        use crate::time::Date;
+        let mut group = FieldGroup {
+            id: FieldGroupId::from_u128(1),
+            name: "Approval".into(),
+            fields: vec![fid(1), fid(3)],
+            description: None,
+            visible_when: None,
+        };
+        let ctx = UtcContext::on(Date::EPOCH);
+        let big = Value::Number(crate::value::testkit::dec("20000"));
+        let small = Value::Number(crate::value::testkit::dec("5"));
+        // Without a condition the group is always shown.
+        assert!(group.is_visible(&|_| None, &ctx));
+        group.check_in_table(&table_types).unwrap();
+
+        group.visible_when = Some(over_ten_thousand());
+        group.check_in_table(&table_types).unwrap();
+        assert!(group.is_visible(&|f| (f == fid(2)).then_some(&big), &ctx));
+        assert!(!group.is_visible(&|f| (f == fid(2)).then_some(&small), &ctx));
+        assert!(!group.is_visible(&|_| None, &ctx));
+        let json = serde_json::to_string(&group).unwrap();
+        assert_eq!(serde_json::from_str::<FieldGroup>(&json).unwrap(), group);
+        // A group stored before `visible_when` existed still loads.
+        let old = r#"{"id":"fgr_00000000000000000000000001","name":"G","fields":[]}"#;
+        assert!(serde_json::from_str::<FieldGroup>(old)
+            .unwrap()
+            .visible_when
+            .is_none());
+
+        // The condition may not read the group's own fields, and must be well typed.
+        group.visible_when = Some(Condition::is_not_empty(fid(1)));
+        assert!(reason(group.check_in_table(&table_types)).contains("its own fields"));
+        group.visible_when = Some(Condition::is_not_empty(fid(99)));
+        assert!(reason(group.check_in_table(&table_types)).contains("unknown field"));
+        group.visible_when = None;
+        group.fields.push(fid(77));
+        assert!(reason(group.check_in_table(&table_types)).contains("lists the unknown field"));
     }
 }
