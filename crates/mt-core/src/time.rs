@@ -10,6 +10,7 @@
 
 use crate::decimal::Decimal;
 use crate::error::{clip, CoreError};
+use crate::field::string_enum;
 use core::fmt;
 use core::str::FromStr;
 use rust_decimal::prelude::ToPrimitive;
@@ -21,6 +22,41 @@ const MS_PER_DAY: i64 = 86_400_000;
 
 const MIN_DAYS: i32 = -719_162; // 0001-01-01
 const MAX_DAYS: i32 = 2_932_896; // 9999-12-31
+
+string_enum! {
+    /// A day of the week.
+    Weekday, "weekday";
+    /// Monday.
+    Monday => "monday",
+    /// Tuesday.
+    Tuesday => "tuesday",
+    /// Wednesday.
+    Wednesday => "wednesday",
+    /// Thursday.
+    Thursday => "thursday",
+    /// Friday.
+    Friday => "friday",
+    /// Saturday.
+    Saturday => "saturday",
+    /// Sunday.
+    Sunday => "sunday",
+}
+
+impl Weekday {
+    /// Number of days after Monday (Monday is 0, Sunday is 6).
+    #[must_use]
+    pub const fn days_from_monday(self) -> u8 {
+        match self {
+            Weekday::Monday => 0,
+            Weekday::Tuesday => 1,
+            Weekday::Wednesday => 2,
+            Weekday::Thursday => 3,
+            Weekday::Friday => 4,
+            Weekday::Saturday => 5,
+            Weekday::Sunday => 6,
+        }
+    }
+}
 
 /// Whether `year` is a leap year in the Gregorian calendar.
 #[must_use]
@@ -199,6 +235,21 @@ impl Date {
     #[must_use]
     pub fn to_timestamp(self) -> Timestamp {
         Timestamp(i64::from(self.0).saturating_mul(MS_PER_DAY))
+    }
+
+    /// The day of the week.
+    #[must_use]
+    pub fn weekday(self) -> Weekday {
+        // 1970-01-01 (day 0) was a Thursday.
+        match i64::from(self.0).saturating_add(3).rem_euclid(7) {
+            0 => Weekday::Monday,
+            1 => Weekday::Tuesday,
+            2 => Weekday::Wednesday,
+            3 => Weekday::Thursday,
+            4 => Weekday::Friday,
+            5 => Weekday::Saturday,
+            _ => Weekday::Sunday,
+        }
     }
 
     /// The date `days` later (or earlier when negative); `None` if out of range.
@@ -1052,5 +1103,26 @@ mod tests {
         ] {
             assert!(bad.parse::<DurationMs>().is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn std_weekdays() {
+        let day = |y, m, d| Date::from_ymd(y, m, d).unwrap();
+        assert_eq!(Date::EPOCH.weekday(), Weekday::Thursday);
+        assert_eq!(day(2026, 5, 13).weekday(), Weekday::Wednesday);
+        assert_eq!(day(2024, 2, 29).weekday(), Weekday::Thursday);
+        assert_eq!(day(2000, 1, 1).weekday(), Weekday::Saturday);
+        assert_eq!(day(1969, 12, 28).weekday(), Weekday::Sunday);
+        assert_eq!(Date::MIN.weekday(), Weekday::Monday);
+        assert_eq!(Date::MAX.weekday(), Weekday::Friday);
+        // Seven consecutive days visit every weekday once, in order.
+        let mut date = day(2026, 5, 11);
+        for (index, weekday) in Weekday::ALL.iter().enumerate() {
+            assert_eq!(date.weekday(), *weekday);
+            assert_eq!(usize::from(weekday.days_from_monday()), index);
+            assert_eq!(weekday.to_string().parse::<Weekday>().unwrap(), *weekday);
+            date = date.checked_add_days(1).unwrap();
+        }
+        assert!("someday".parse::<Weekday>().is_err());
     }
 }

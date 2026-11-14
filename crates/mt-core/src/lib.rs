@@ -23,6 +23,7 @@
 
 pub mod codes;
 pub mod coerce;
+pub mod condition;
 pub mod convert;
 pub mod decimal;
 pub mod error;
