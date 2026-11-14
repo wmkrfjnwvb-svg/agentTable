@@ -152,6 +152,25 @@ impl NumberingPattern {
         if seq_count == 0 {
             return Err(fail(chars.len(), "a {seq} token is required"));
         }
+        // The counter restarts with the finest date token, so the rendered text must show the
+        // whole period; otherwise `INV-{MM}-{seq}` would produce the same numbers every year.
+        let has_year = tokens
+            .iter()
+            .any(|t| matches!(t, NumberingToken::Year4 | NumberingToken::Year2));
+        let has_month = tokens.iter().any(|t| matches!(t, NumberingToken::Month));
+        let has_day = tokens.iter().any(|t| matches!(t, NumberingToken::Day));
+        if has_month && !has_year {
+            return Err(fail(
+                chars.len(),
+                "{MM} needs a year token, or the numbers would repeat every year",
+            ));
+        }
+        if has_day && !has_month {
+            return Err(fail(
+                chars.len(),
+                "{DD} needs {MM} and a year token, or the numbers would repeat",
+            ));
+        }
         Ok(NumberingPattern {
             source: source.to_owned(),
             tokens,
@@ -189,6 +208,25 @@ impl NumberingPattern {
             }
         }
         out
+    }
+
+    /// Allocates the next identifier of the period `date` falls in.
+    ///
+    /// `next` is the stored counter of that period (storage keeps one counter per
+    /// [`NumberingPattern::period_key`]), or `None` when the period has no counter yet.
+    /// Returns the identifier and the counter to store. Because every period has its own
+    /// counter, a back-dated record continues its own period instead of restarting it.
+    ///
+    /// Run it inside the transaction that creates the record when numbers must be gap-free.
+    ///
+    /// # Errors
+    /// [`CoreError::Overflow`] when the counter is exhausted.
+    pub fn allocate(&self, next: Option<u64>, date: Date) -> Result<(String, u64), CoreError> {
+        let seq = next.unwrap_or(1).max(1);
+        let following = seq
+            .checked_add(1)
+            .ok_or(CoreError::Overflow("allocating a sequence number"))?;
+        Ok((self.render(date, seq), following))
     }
 
     /// How often the sequence restarts: the finest date token present decides.
@@ -352,6 +390,10 @@ mod tests {
             ("{seq}}", 5),
             ("a}{seq}", 1),
             ("{seq}{", 5),
+            // A month or day without the coarser tokens would repeat numbers.
+            ("INV-{MM}-{seq}", 14),
+            ("{DD}-{seq}", 10),
+            ("{YYYY}{DD}{seq}", 15),
         ];
         for (pattern, position) in cases {
             match NumberingPattern::new(pattern) {
@@ -363,5 +405,47 @@ mod tests {
         }
         let long = format!("{}{{seq}}", "x".repeat(MAX_NUMBERING_CHARS));
         assert!(NumberingPattern::new(&long).is_err());
+    }
+
+    #[test]
+    fn std_allocation_keeps_one_counter_per_period() {
+        use std::collections::BTreeMap;
+        let pattern = NumberingPattern::new("PO-{YYYY}-{seq:3}").unwrap();
+        // What storage does: one counter per period key.
+        let mut counters: BTreeMap<String, u64> = BTreeMap::new();
+        let mut issue = |date: Date| {
+            let key = pattern.period_key(date);
+            let (number, next) = pattern.allocate(counters.get(&key).copied(), date).unwrap();
+            counters.insert(key, next);
+            number
+        };
+        let y2025 = Date::from_ymd(2025, 12, 31).unwrap();
+        let y2026 = Date::from_ymd(2026, 1, 1).unwrap();
+        assert_eq!(issue(y2025), "PO-2025-001");
+        assert_eq!(issue(y2025), "PO-2025-002");
+        assert_eq!(issue(y2026), "PO-2026-001");
+        // A back-dated record continues 2025; it does not reuse PO-2025-001.
+        assert_eq!(issue(y2025), "PO-2025-003");
+        assert_eq!(issue(y2026), "PO-2026-002");
+    }
+
+    #[test]
+    fn edge_allocation_bounds() {
+        let pattern = NumberingPattern::new("{seq:2}").unwrap();
+        let date = Date::from_ymd(2026, 1, 1).unwrap();
+        // A stored counter of 0 (never valid) is treated as the first number.
+        assert_eq!(
+            pattern.allocate(Some(0), date).unwrap(),
+            ("01".to_owned(), 2)
+        );
+        // Past the padding width the number simply gets wider; it never wraps.
+        assert_eq!(
+            pattern.allocate(Some(100), date).unwrap(),
+            ("100".to_owned(), 101)
+        );
+        assert_eq!(
+            pattern.allocate(Some(u64::MAX), date),
+            Err(CoreError::Overflow("allocating a sequence number"))
+        );
     }
 }

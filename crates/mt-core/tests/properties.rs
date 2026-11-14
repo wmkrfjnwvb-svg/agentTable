@@ -258,7 +258,7 @@ proptest! {
         let Some(data_type) = value.data_type() else { return Ok(()) };
         let mut field = FieldDef::new(FieldId::from_u128(1), "f", data_type);
         if data_type.is_reference() {
-            field.options = OptionsSource::RefSet { set: mt_core::id::RefSetId::from_u128(1), subtree: None, leaves_only: false };
+            field.options = OptionsSource::of_set(mt_core::id::RefSetId::from_u128(1));
         }
         if matches!(data_type, DataType::Link) {
             field.options = OptionsSource::Table { table: TableId::from_u128(1) };

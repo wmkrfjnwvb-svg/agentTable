@@ -11,7 +11,7 @@
 //! guards. Comparisons with other fields of the record are checked by [`validate_cross_field`].
 
 use crate::decimal::{canonical_string, decimal_places, Decimal};
-use crate::field::{DataType, FieldDef, OptionsSource};
+use crate::field::{DataType, FieldDef, OptionsSource, RefScope};
 use crate::format::FormatViolation;
 use crate::id::{FieldId, RefItemId, RefSetId};
 use crate::sortkey::compare_values;
@@ -57,6 +57,8 @@ pub enum IssueCode {
     OptionNotAllowed,
     /// A comparison with another field of the record does not hold.
     CrossField,
+    /// A cascading option is not below the item chosen in the parent field.
+    CascadeMismatch,
 }
 
 impl IssueCode {
@@ -82,6 +84,7 @@ impl IssueCode {
             IssueCode::DuplicateItems => "duplicate_items",
             IssueCode::OptionNotAllowed => "option_not_allowed",
             IssueCode::CrossField => "cross_field",
+            IssueCode::CascadeMismatch => "cascade_mismatch",
         }
     }
 }
@@ -100,18 +103,19 @@ pub struct ValidationIssue {
     pub message: String,
 }
 
-/// Decides whether an item of a reference set may be selected in a field. Implemented by the
-/// reference-data module, which knows the tenant's effective set, validity dates and tree.
+/// Answers questions about reference data that only the reference-data module can answer:
+/// it knows the tenant's effective sets, validity dates, trees and parameters.
 pub trait OptionResolver {
-    /// Whether `item` is an enabled member of `set`, inside `subtree` (if given) and a leaf
-    /// (if `leaves_only`).
-    fn is_selectable(
-        &self,
-        set: RefSetId,
-        subtree: Option<RefItemId>,
-        leaves_only: bool,
-        item: RefItemId,
-    ) -> bool;
+    /// Whether `item` is an enabled member of the scope: in the set, inside the subtree, at
+    /// the level and a leaf, as far as the scope asks for each.
+    fn is_selectable(&self, scope: &RefScope, item: RefItemId) -> bool;
+
+    /// Whether `item` is a descendant of `ancestor` in `set`, whatever its status. Used for
+    /// cascades, where an item that was disabled later must still count as "below its parent".
+    fn is_within(&self, set: RefSetId, ancestor: RefItemId, item: RefItemId) -> bool;
+
+    /// Whether the parameter `key` currently lists `item` as an option.
+    fn parameter_offers(&self, key: &str, item: RefItemId) -> bool;
 }
 
 /// An [`OptionResolver`] that accepts every item. Use it where reference data is not available
@@ -120,13 +124,15 @@ pub trait OptionResolver {
 pub struct AcceptAllOptions;
 
 impl OptionResolver for AcceptAllOptions {
-    fn is_selectable(
-        &self,
-        _set: RefSetId,
-        _subtree: Option<RefItemId>,
-        _leaves_only: bool,
-        _item: RefItemId,
-    ) -> bool {
+    fn is_selectable(&self, _scope: &RefScope, _item: RefItemId) -> bool {
+        true
+    }
+
+    fn is_within(&self, _set: RefSetId, _ancestor: RefItemId, _item: RefItemId) -> bool {
+        true
+    }
+
+    fn parameter_offers(&self, _key: &str, _item: RefItemId) -> bool {
         true
     }
 }
@@ -405,11 +411,11 @@ fn check_options(
             OptionsSource::Inline { options } => options
                 .iter()
                 .any(|option| option.id == *item && option.enabled),
-            OptionsSource::RefSet {
-                set,
-                subtree,
-                leaves_only,
-            } => resolver.is_selectable(*set, *subtree, *leaves_only, *item),
+            OptionsSource::RefSet { .. } => field
+                .options
+                .ref_scope()
+                .is_some_and(|scope| resolver.is_selectable(&scope, *item)),
+            OptionsSource::Parameter { key } => resolver.parameter_offers(key, *item),
             OptionsSource::None | OptionsSource::Table { .. } => false,
         };
         if !allowed {
@@ -501,6 +507,56 @@ pub fn validate_cross_field<'a>(
                 ),
             ));
         }
+    }
+    out
+}
+
+/// Checks a cascading field against its parent field (see
+/// [`OptionsSource::RefSet`]`::cascade_from`): every selected item must be a descendant of the
+/// item chosen in the parent field. `other_value` returns the value of another field of the
+/// same record.
+///
+/// Unlike option membership, this is checked for items already on the record too: when the
+/// parent changes, a child that no longer fits is reported so that it gets cleared or fixed.
+/// An empty child is always fine; a filled child under an empty parent is not.
+#[must_use]
+pub fn validate_cascade<'a>(
+    field: &FieldDef,
+    value: &Value,
+    other_value: &dyn Fn(FieldId) -> Option<&'a Value>,
+    resolver: &dyn OptionResolver,
+) -> Vec<ValidationIssue> {
+    let mut out = Vec::new();
+    let (Some(parent_field), Some(scope)) =
+        (field.options.cascade_from(), field.options.ref_scope())
+    else {
+        return out;
+    };
+    if value.is_empty() {
+        return out;
+    }
+    let parent_item = match other_value(parent_field) {
+        Some(Value::Reference(item)) => Some(*item),
+        Some(_) | None => None,
+    };
+    let fits = parent_item.is_some_and(|parent| {
+        reference_items(value)
+            .iter()
+            .all(|item| resolver.is_within(scope.set, parent, *item))
+    });
+    if !fits {
+        let message = if parent_item.is_some() {
+            format!(
+                "`{}` must be chosen from the options below the value of field {parent_field}",
+                field.name
+            )
+        } else {
+            format!(
+                "choose a value for field {parent_field} before `{}`",
+                field.name
+            )
+        };
+        out.push(issue(field, IssueCode::CascadeMismatch, message));
     }
     out
 }
@@ -823,17 +879,21 @@ mod tests {
 
     struct OnlyEven;
     impl OptionResolver for OnlyEven {
-        fn is_selectable(
-            &self,
-            set: RefSetId,
-            subtree: Option<RefItemId>,
-            leaves_only: bool,
-            item: RefItemId,
-        ) -> bool {
-            set == RefSetId::from_u128(7)
-                && subtree == Some(rid(100))
-                && leaves_only
+        fn is_selectable(&self, scope: &RefScope, item: RefItemId) -> bool {
+            scope.set == RefSetId::from_u128(7)
+                && scope.subtree == Some(rid(100))
+                && scope.level == Some(2)
+                && scope.leaves_only
                 && item.as_u128() % 2 == 0
+        }
+
+        /// Item `n` is below ancestor `a` when `n / 10 == a`.
+        fn is_within(&self, set: RefSetId, ancestor: RefItemId, item: RefItemId) -> bool {
+            set == RefSetId::from_u128(7) && item.as_u128() / 10 == ancestor.as_u128()
+        }
+
+        fn parameter_offers(&self, key: &str, item: RefItemId) -> bool {
+            key == "sales.regions" && item.as_u128() % 2 == 0
         }
     }
 
@@ -843,7 +903,9 @@ mod tests {
         field.options = OptionsSource::RefSet {
             set: RefSetId::from_u128(7),
             subtree: Some(rid(100)),
+            level: Some(2),
             leaves_only: true,
+            cascade_from: None,
         };
         assert_eq!(
             codes(&validate_value(
@@ -987,6 +1049,7 @@ mod tests {
             IssueCode::DuplicateItems,
             IssueCode::OptionNotAllowed,
             IssueCode::CrossField,
+            IssueCode::CascadeMismatch,
         ];
         for code in all {
             assert_eq!(
@@ -1006,5 +1069,159 @@ mod tests {
             serde_json::from_str::<ValidationIssue>(&json).unwrap(),
             issue
         );
+    }
+    #[test]
+    fn std_parameter_options_go_through_the_resolver() {
+        let mut field = field_of(DataType::MultiReference);
+        field.options = OptionsSource::Parameter {
+            key: "sales.regions".into(),
+        };
+        field.check().unwrap();
+        let even = Value::MultiReference(vec![rid(2), rid(4)]);
+        let mixed = Value::MultiReference(vec![rid(2), rid(3)]);
+        assert!(validate_value(&field, &even, None, &OnlyEven).is_empty());
+        assert_eq!(
+            codes(&validate_value(&field, &mixed, None, &OnlyEven)),
+            vec![IssueCode::OptionNotAllowed]
+        );
+        // An item that is already on the record stays, even if the parameter dropped it.
+        assert!(validate_value(&field, &mixed, Some(&mixed), &OnlyEven).is_empty());
+        // Another parameter offers nothing.
+        field.options = OptionsSource::Parameter {
+            key: "other".into(),
+        };
+        assert_eq!(
+            codes(&validate_value(&field, &even, None, &OnlyEven)),
+            vec![IssueCode::OptionNotAllowed, IssueCode::OptionNotAllowed]
+        );
+    }
+
+    fn cascading(data_type: DataType) -> FieldDef {
+        let mut field = field_of(data_type);
+        field.options = OptionsSource::RefSet {
+            set: RefSetId::from_u128(7),
+            subtree: None,
+            level: None,
+            leaves_only: false,
+            cascade_from: Some(fid(50)),
+        };
+        field.check().unwrap();
+        field
+    }
+
+    #[test]
+    fn std_cascade_requires_a_descendant_of_the_parent_value() {
+        // In `OnlyEven`, item n is below ancestor a when n / 10 == a: 31..39 are below 3.
+        let city = cascading(DataType::Reference);
+        let region = Value::Reference(rid(3));
+        let lookup = |f: FieldId| (f == fid(50)).then_some(&region);
+        let check = |value: &Value| codes(&validate_cascade(&city, value, &lookup, &OnlyEven));
+
+        assert!(check(&Value::Reference(rid(35))).is_empty());
+        assert_eq!(
+            check(&Value::Reference(rid(45))),
+            vec![IssueCode::CascadeMismatch]
+        );
+        // An empty child never violates a cascade.
+        assert!(check(&Value::Null).is_empty());
+
+        let cities = cascading(DataType::MultiReference);
+        let check_many =
+            |value: &Value| codes(&validate_cascade(&cities, value, &lookup, &OnlyEven));
+        assert!(check_many(&Value::MultiReference(vec![rid(31), rid(39)])).is_empty());
+        // One misfit is one issue for the field, not one per item.
+        assert_eq!(
+            check_many(&Value::MultiReference(vec![rid(31), rid(45), rid(55)])),
+            vec![IssueCode::CascadeMismatch]
+        );
+        assert!(check_many(&Value::MultiReference(vec![])).is_empty());
+    }
+
+    #[test]
+    fn anomalous_cascade_with_a_missing_or_unusable_parent() {
+        let city = cascading(DataType::Reference);
+        let value = Value::Reference(rid(35));
+
+        // The parent is empty, absent, or not a single reference: the child cannot be judged.
+        let empty = Value::Null;
+        let text = Value::Text("3".into());
+        let many = Value::MultiReference(vec![rid(3)]);
+        for parent in [&empty, &text, &many] {
+            let lookup = |f: FieldId| (f == fid(50)).then_some(parent);
+            let issues = validate_cascade(&city, &value, &lookup, &OnlyEven);
+            assert_eq!(
+                codes(&issues),
+                vec![IssueCode::CascadeMismatch],
+                "{parent:?}"
+            );
+            assert!(
+                issues[0].message.contains("before"),
+                "{}",
+                issues[0].message
+            );
+        }
+        let absent = |_: FieldId| None;
+        assert_eq!(
+            codes(&validate_cascade(&city, &value, &absent, &OnlyEven)),
+            vec![IssueCode::CascadeMismatch]
+        );
+
+        // The message for a real mismatch points at the parent field.
+        let region = Value::Reference(rid(9));
+        let lookup = |f: FieldId| (f == fid(50)).then_some(&region);
+        let issues = validate_cascade(&city, &value, &lookup, &OnlyEven);
+        assert!(issues[0].message.contains("below"), "{}", issues[0].message);
+        assert_eq!(issues[0].field, city.id);
+    }
+
+    #[test]
+    fn edge_cascade_is_checked_even_for_kept_and_disabled_items() {
+        // `is_within` ignores status on purpose; `is_selectable` would refuse odd items.
+        let city = cascading(DataType::Reference);
+        let region = Value::Reference(rid(3));
+        let lookup = |f: FieldId| (f == fid(50)).then_some(&region);
+        assert!(validate_cascade(&city, &Value::Reference(rid(37)), &lookup, &OnlyEven).is_empty());
+        // The parent changed: the value that was fine before is now reported.
+        let moved = Value::Reference(rid(4));
+        let lookup = |f: FieldId| (f == fid(50)).then_some(&moved);
+        assert_eq!(
+            codes(&validate_cascade(
+                &city,
+                &Value::Reference(rid(37)),
+                &lookup,
+                &OnlyEven
+            )),
+            vec![IssueCode::CascadeMismatch]
+        );
+    }
+
+    #[test]
+    fn std_fields_without_a_cascade_have_no_cascade_issues() {
+        let lookup = |_: FieldId| None;
+        for field in [field_of(DataType::Reference), field_of(DataType::Text)] {
+            for value in samples() {
+                assert!(validate_cascade(&field, &value, &lookup, &OnlyEven).is_empty());
+            }
+        }
+        // The accept-all resolver accepts cascades too.
+        let city = cascading(DataType::Reference);
+        let region = Value::Reference(rid(1));
+        let lookup = |f: FieldId| (f == fid(50)).then_some(&region);
+        assert!(validate_cascade(
+            &city,
+            &Value::Reference(rid(99)),
+            &lookup,
+            &AcceptAllOptions
+        )
+        .is_empty());
+        let mut by_parameter = field_of(DataType::Reference);
+        by_parameter.options = OptionsSource::Parameter { key: "k".into() };
+        assert!(validate_value(
+            &by_parameter,
+            &Value::Reference(rid(5)),
+            None,
+            &AcceptAllOptions
+        )
+        .is_empty());
     }
 }

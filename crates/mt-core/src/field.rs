@@ -16,12 +16,13 @@
 use crate::decimal::Decimal;
 use crate::error::{clip, CoreError};
 use crate::format::FormatId;
-use crate::id::{FieldGroupId, FieldId, FieldLibraryItemId, RefItemId, RefSetId, TableId};
+use crate::id::{FieldGroupId, FieldId, FieldLibraryItemId, RefItemId, RefSetId, SkillId, TableId};
 use crate::money::Currency;
 use crate::numbering::NumberingPattern;
 use crate::pattern::TextPattern;
 use core::fmt;
 use core::str::FromStr;
+use std::collections::BTreeMap;
 
 /// Maximum number of characters in a field or group name.
 pub const MAX_NAME_CHARS: usize = 255;
@@ -31,6 +32,12 @@ pub const MAX_AFFIX_CHARS: usize = 32;
 pub const MAX_DECIMALS: u8 = 28;
 /// Maximum number of inline options of one field.
 pub const MAX_INLINE_OPTIONS: usize = 10_000;
+/// Deepest level of a reference-set tree a field may point at.
+pub const MAX_REF_LEVEL: u8 = 16;
+/// Maximum number of characters in a parameter key.
+pub const MAX_PARAMETER_KEY_CHARS: usize = 128;
+/// Maximum number of localised names of one field.
+pub const MAX_LOCALISED_NAMES: usize = 64;
 
 macro_rules! string_enum {
     (
@@ -434,15 +441,90 @@ pub enum OptionsSource {
         /// Restrict to the descendants of this item.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subtree: Option<RefItemId>,
+        /// Restrict to the items at this depth of the tree (1 = top level).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        level: Option<u8>,
         /// Only leaf items may be selected.
         #[serde(default)]
         leaves_only: bool,
+        /// Cascade: restrict to the descendants of the item chosen in this other field of
+        /// the same record (country → region → city). Cannot be combined with `subtree`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cascade_from: Option<FieldId>,
+    },
+    /// Items listed in a parameter (a tenant-, base- or user-level setting).
+    Parameter {
+        /// The parameter key.
+        key: String,
     },
     /// Records of a table (for link fields).
     Table {
         /// The linked table.
         table: TableId,
     },
+}
+
+/// The part of a reference set a field offers: what an option resolver needs to decide
+/// whether an item may be selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefScope {
+    /// The reference set.
+    pub set: RefSetId,
+    /// Only descendants of this item.
+    pub subtree: Option<RefItemId>,
+    /// Only items at this depth (1 = top level).
+    pub level: Option<u8>,
+    /// Only leaf items.
+    pub leaves_only: bool,
+}
+
+impl OptionsSource {
+    /// A reference-set source: the reference set with its static restrictions.
+    pub fn of_set(set: RefSetId) -> Self {
+        OptionsSource::RefSet {
+            set,
+            subtree: None,
+            level: None,
+            leaves_only: false,
+            cascade_from: None,
+        }
+    }
+
+    /// The static scope of a reference-set source (the cascade is applied per record by
+    /// [`crate::validate::validate_cascade`]).
+    #[must_use]
+    pub fn ref_scope(&self) -> Option<RefScope> {
+        match self {
+            OptionsSource::RefSet {
+                set,
+                subtree,
+                level,
+                leaves_only,
+                cascade_from: _,
+            } => Some(RefScope {
+                set: *set,
+                subtree: *subtree,
+                level: *level,
+                leaves_only: *leaves_only,
+            }),
+            OptionsSource::None
+            | OptionsSource::Inline { .. }
+            | OptionsSource::Parameter { .. }
+            | OptionsSource::Table { .. } => None,
+        }
+    }
+
+    /// The field whose value decides the subtree offered by this source, if it cascades.
+    #[must_use]
+    pub fn cascade_from(&self) -> Option<FieldId> {
+        match self {
+            OptionsSource::RefSet { cascade_from, .. } => *cascade_from,
+            OptionsSource::None
+            | OptionsSource::Inline { .. }
+            | OptionsSource::Parameter { .. }
+            | OptionsSource::Table { .. } => None,
+        }
+    }
 }
 
 /// How much of a value a mask leaves readable.
@@ -643,6 +725,35 @@ pub struct FieldDef {
     /// Help text shown next to the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help_text: Option<String>,
+    /// Localised display names by locale tag (`de`, `ja`, `en-IN`); `name` is the fallback.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub names: BTreeMap<String, String>,
+    /// The AI skill that fills this field, if it is an AI field. The output is still typed
+    /// by `data_type` and bound to the field's options; it is never free "AI text".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_skill: Option<SkillId>,
+    /// Definition version: starts at 1, raised by every schema change to the field.
+    #[serde(default = "first_version")]
+    pub version: u32,
+}
+
+const fn first_version() -> u32 {
+    1
+}
+
+/// Whether `tag` is a locale tag this platform accepts: a 2–3 letter lowercase language,
+/// optionally followed by `-` and a 2-letter uppercase region (`en`, `de`, `ja`, `en-IN`).
+#[must_use]
+pub fn is_locale_tag(tag: &str) -> bool {
+    let (language, region) = match tag.split_once('-') {
+        Some((language, region)) => (language, Some(region)),
+        None => (tag, None),
+    };
+    let language_ok =
+        (2..=3).contains(&language.len()) && language.bytes().all(|b| b.is_ascii_lowercase());
+    let region_ok =
+        region.is_none_or(|r| r.len() == 2 && r.bytes().all(|b| b.is_ascii_uppercase()));
+    language_ok && region_ok
 }
 
 fn invalid(reason: impl Into<String>) -> CoreError {
@@ -685,7 +796,23 @@ impl FieldDef {
             group: None,
             library_item: None,
             help_text: None,
+            names: BTreeMap::new(),
+            ai_skill: None,
+            version: 1,
         }
+    }
+
+    /// The name to show for a locale: the exact tag, else its language (`de-AT` → `de`),
+    /// else the default name.
+    #[must_use]
+    pub fn display_name(&self, locale: &str) -> &str {
+        let language = locale
+            .split_once('-')
+            .map_or(locale, |(language, _)| language);
+        self.names
+            .get(locale)
+            .or_else(|| self.names.get(language))
+            .map_or(self.name.as_str(), String::as_str)
     }
 
     /// The inline options of the field, if it has an inline option list.
@@ -693,9 +820,10 @@ impl FieldDef {
     pub fn inline_options(&self) -> Option<&[InlineOption]> {
         match &self.options {
             OptionsSource::Inline { options } => Some(options),
-            OptionsSource::None | OptionsSource::RefSet { .. } | OptionsSource::Table { .. } => {
-                None
-            }
+            OptionsSource::None
+            | OptionsSource::RefSet { .. }
+            | OptionsSource::Parameter { .. }
+            | OptionsSource::Table { .. } => None,
         }
     }
 
@@ -712,6 +840,31 @@ impl FieldDef {
     /// [`CoreError::InvalidDefinition`] describing the first inconsistency found.
     pub fn check(&self) -> Result<(), CoreError> {
         check_name("field", &self.name)?;
+        if self.names.len() > MAX_LOCALISED_NAMES {
+            return Err(invalid(format!(
+                "more than {MAX_LOCALISED_NAMES} localised names"
+            )));
+        }
+        for (locale, name) in &self.names {
+            if !is_locale_tag(locale) {
+                return Err(invalid(format!(
+                    "`{}` is not a locale tag such as `de` or `en-IN`",
+                    clip(locale)
+                )));
+            }
+            check_name("localised field", name)?;
+        }
+        if self.version == 0 {
+            return Err(invalid("field version starts at 1"));
+        }
+        if self.ai_skill.is_some() {
+            if self.format.numbering.is_some() {
+                return Err(invalid("an auto-numbered field cannot be an AI field"));
+            }
+            if matches!(self.data_type, DataType::Attachment) {
+                return Err(invalid("an attachment field cannot be an AI field"));
+            }
+        }
         if !self.widget.supports(self.data_type) {
             return Err(invalid(format!(
                 "widget {} cannot edit a {} field",
@@ -773,11 +926,49 @@ impl FieldDef {
                     labels.push(&option.label);
                 }
             }
-            OptionsSource::RefSet { .. } => {
+            OptionsSource::RefSet {
+                set: _,
+                subtree,
+                level,
+                leaves_only: _,
+                cascade_from,
+            } => {
                 if !t.is_reference() {
                     return Err(invalid(format!(
                         "a reference set cannot be attached to a {t} field"
                     )));
+                }
+                if level.is_some_and(|l| l == 0 || l > MAX_REF_LEVEL) {
+                    return Err(invalid(format!(
+                        "a reference-set level must be between 1 and {MAX_REF_LEVEL}"
+                    )));
+                }
+                if let Some(parent) = cascade_from {
+                    if *parent == self.id {
+                        return Err(invalid("a field cannot cascade from itself"));
+                    }
+                    if subtree.is_some() {
+                        return Err(invalid(
+                            "a cascade already decides the subtree; remove the fixed subtree",
+                        ));
+                    }
+                }
+            }
+            OptionsSource::Parameter { key } => {
+                if !t.is_reference() {
+                    return Err(invalid(format!(
+                        "a parameter option list cannot be attached to a {t} field"
+                    )));
+                }
+                let well_formed = !key.is_empty()
+                    && key.chars().count() <= MAX_PARAMETER_KEY_CHARS
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+                if !well_formed {
+                    return Err(invalid(
+                        "a parameter key uses letters, digits, `.`, `_` and `-` (1 to 128 characters)",
+                    ));
                 }
             }
             OptionsSource::Table { .. } => {
@@ -1210,11 +1401,7 @@ mod tests {
         let mut f = field_of(DataType::Text);
         f.options = OptionsSource::Inline { options: vec![] };
         assert!(reason(f.check()).contains("inline options cannot"));
-        f.options = OptionsSource::RefSet {
-            set: RefSetId::from_u128(1),
-            subtree: None,
-            leaves_only: false,
-        };
+        f.options = OptionsSource::of_set(RefSetId::from_u128(1));
         assert!(reason(f.check()).contains("reference set cannot"));
         f.options = OptionsSource::Table {
             table: TableId::from_u128(1),
@@ -1237,9 +1424,21 @@ mod tests {
         f.options = OptionsSource::RefSet {
             set: RefSetId::from_u128(1),
             subtree: Some(RefItemId::from_u128(2)),
+            level: Some(3),
             leaves_only: true,
+            cascade_from: None,
         };
         f.check().unwrap();
+        assert_eq!(
+            f.options.ref_scope(),
+            Some(RefScope {
+                set: RefSetId::from_u128(1),
+                subtree: Some(RefItemId::from_u128(2)),
+                level: Some(3),
+                leaves_only: true,
+            })
+        );
+        assert_eq!(f.options.cascade_from(), None);
         assert!(f.inline_options().is_none());
         assert_eq!(
             field_of(DataType::Reference)
@@ -1380,5 +1579,165 @@ mod tests {
         group.fields.clear();
         group.name = String::new();
         assert!(reason(group.check()).contains("group name"));
+    }
+    #[test]
+    fn std_display_name_falls_back_from_region_to_language_to_default() {
+        let mut field = FieldDef::new(fid(1), "Amount", DataType::Number);
+        assert_eq!(field.display_name("de"), "Amount");
+        field.names.insert("de".into(), "Betrag".into());
+        field.names.insert("de-CH".into(), "Betrag (CHF)".into());
+        field.names.insert("ja".into(), "金額".into());
+        field.check().unwrap();
+        assert_eq!(field.display_name("de-CH"), "Betrag (CHF)");
+        assert_eq!(field.display_name("de-AT"), "Betrag");
+        assert_eq!(field.display_name("de"), "Betrag");
+        assert_eq!(field.display_name("ja"), "金額");
+        assert_eq!(field.display_name("ko"), "Amount");
+        assert_eq!(field.display_name(""), "Amount");
+        let json = serde_json::to_string(&field).unwrap();
+        assert_eq!(serde_json::from_str::<FieldDef>(&json).unwrap(), field);
+    }
+
+    #[test]
+    fn std_locale_tags() {
+        for tag in ["en", "de", "ja", "ko", "fil", "en-IN", "de-CH", "zh-TW"] {
+            assert!(is_locale_tag(tag), "{tag}");
+        }
+        for tag in [
+            "", "e", "EN", "en-in", "en_IN", "en-", "-IN", "english", "en-IND", "en-IN-x", "e1",
+        ] {
+            assert!(!is_locale_tag(tag), "{tag}");
+        }
+    }
+
+    #[test]
+    fn invalid_localised_names_and_versions() {
+        let mut field = FieldDef::new(fid(1), "Amount", DataType::Number);
+        field.names.insert("German".into(), "Betrag".into());
+        assert!(reason(field.check()).contains("not a locale tag"));
+        field.names.clear();
+        field.names.insert("de".into(), "  ".into());
+        assert!(reason(field.check()).contains("localised field name"));
+        field.names.clear();
+        for i in 0..=MAX_LOCALISED_NAMES {
+            let a = char::from(b'a' + u8::try_from(i / 26).unwrap());
+            let b = char::from(b'a' + u8::try_from(i % 26).unwrap());
+            field.names.insert(format!("{a}{b}"), "x".into());
+        }
+        assert!(reason(field.check()).contains("localised names"));
+        field.names.clear();
+        field.version = 0;
+        assert!(reason(field.check()).contains("version starts at 1"));
+    }
+
+    #[test]
+    fn std_old_definitions_without_the_new_facets_still_load() {
+        // A definition stored before `names`, `ai_skill` and `version` existed.
+        let current = FieldDef::new(fid(1), "Title", DataType::Text);
+        let mut json = serde_json::to_value(&current).unwrap();
+        let object = json.as_object_mut().unwrap();
+        assert!(object.remove("version").is_some());
+        assert!(!object.contains_key("names") && !object.contains_key("ai_skill"));
+        let field: FieldDef = serde_json::from_value(json).unwrap();
+        assert_eq!(field, current);
+        assert_eq!(field.version, 1);
+        field.check().unwrap();
+        // A reference-set source stored before `level` and `cascade_from` existed.
+        let json = r#"{"kind":"ref_set","set":"rfs_00000000000000000000000001"}"#;
+        let source: OptionsSource = serde_json::from_str(json).unwrap();
+        assert_eq!(source, OptionsSource::of_set(RefSetId::from_u128(1)));
+    }
+
+    #[test]
+    fn std_ai_fields_stay_typed() {
+        let skill = crate::id::SkillId::from_u128(9);
+        let mut category = field_of(DataType::Reference);
+        category.ai_skill = Some(skill);
+        category.check().unwrap();
+        let json = serde_json::to_string(&category).unwrap();
+        assert_eq!(serde_json::from_str::<FieldDef>(&json).unwrap(), category);
+
+        let mut numbered = field_of(DataType::Text);
+        numbered.format.numbering = Some(NumberingPattern::new("T-{seq}").unwrap());
+        numbered.ai_skill = Some(skill);
+        assert!(reason(numbered.check()).contains("auto-numbered"));
+        let mut file = field_of(DataType::Attachment);
+        file.ai_skill = Some(skill);
+        assert!(reason(file.check()).contains("attachment"));
+    }
+
+    #[test]
+    fn std_cascading_and_parameter_option_sources() {
+        let set = RefSetId::from_u128(1);
+        let mut city = field_of(DataType::Reference);
+        city.options = OptionsSource::RefSet {
+            set,
+            subtree: None,
+            level: Some(3),
+            leaves_only: true,
+            cascade_from: Some(fid(2)),
+        };
+        city.check().unwrap();
+        assert_eq!(city.options.cascade_from(), Some(fid(2)));
+        assert_eq!(city.options.ref_scope().unwrap().level, Some(3));
+        let json = serde_json::to_string(&city).unwrap();
+        assert_eq!(serde_json::from_str::<FieldDef>(&json).unwrap(), city);
+
+        let mut by_parameter = field_of(DataType::MultiReference);
+        by_parameter.options = OptionsSource::Parameter {
+            key: "sales.regions_v2-eu".into(),
+        };
+        by_parameter.check().unwrap();
+        assert!(by_parameter.inline_options().is_none());
+        assert_eq!(by_parameter.options.ref_scope(), None);
+        assert_eq!(by_parameter.options.cascade_from(), None);
+        for source in [
+            OptionsSource::None,
+            OptionsSource::Inline { options: vec![] },
+        ] {
+            assert_eq!(source.ref_scope(), None);
+            assert_eq!(source.cascade_from(), None);
+        }
+        let link = field_of(DataType::Link);
+        assert_eq!(link.options.ref_scope(), None);
+        assert_eq!(link.options.cascade_from(), None);
+    }
+
+    #[test]
+    fn invalid_cascading_and_parameter_option_sources() {
+        let set = RefSetId::from_u128(1);
+        let source = |subtree, level, cascade_from| OptionsSource::RefSet {
+            set,
+            subtree,
+            level,
+            leaves_only: false,
+            cascade_from,
+        };
+        let mut field = field_of(DataType::Reference);
+        field.options = source(None, Some(0), None);
+        assert!(reason(field.check()).contains("level must be between"));
+        field.options = source(None, Some(MAX_REF_LEVEL + 1), None);
+        assert!(reason(field.check()).contains("level must be between"));
+        field.options = source(None, Some(MAX_REF_LEVEL), None);
+        field.check().unwrap();
+        field.options = source(None, None, Some(field.id));
+        assert!(reason(field.check()).contains("cascade from itself"));
+        field.options = source(Some(RefItemId::from_u128(5)), None, Some(fid(2)));
+        assert!(reason(field.check()).contains("already decides the subtree"));
+
+        for key in [
+            "",
+            "has space",
+            "ünï",
+            &"k".repeat(MAX_PARAMETER_KEY_CHARS + 1),
+        ] {
+            field.options = OptionsSource::Parameter {
+                key: key.to_owned(),
+            };
+            assert!(reason(field.check()).contains("parameter key"), "{key}");
+        }
+        let mut text = field_of(DataType::Text);
+        text.options = OptionsSource::Parameter { key: "k".into() };
+        assert!(reason(text.check()).contains("parameter option list cannot"));
     }
 }

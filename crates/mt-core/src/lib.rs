@@ -29,6 +29,7 @@ pub mod error;
 pub mod field;
 pub mod format;
 pub mod id;
+pub mod limits;
 pub mod money;
 pub mod numbering;
 pub mod pattern;
