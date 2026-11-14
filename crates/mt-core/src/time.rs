@@ -52,10 +52,22 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
     let m = i64::from(month);
     let era = y / 400;
     let yoe = y % 400;
-    let mp = if m > 2 { m.saturating_sub(3) } else { m.saturating_add(9) };
-    let doy = (mp.saturating_mul(153).saturating_add(2) / 5).saturating_add(i64::from(day)).saturating_sub(1);
-    let doe = yoe.saturating_mul(365).saturating_add(yoe / 4).saturating_sub(yoe / 100).saturating_add(doy);
-    era.saturating_mul(146_097).saturating_add(doe).saturating_sub(719_468)
+    let mp = if m > 2 {
+        m.saturating_sub(3)
+    } else {
+        m.saturating_add(9)
+    };
+    let doy = (mp.saturating_mul(153).saturating_add(2) / 5)
+        .saturating_add(i64::from(day))
+        .saturating_sub(1);
+    let doe = yoe
+        .saturating_mul(365)
+        .saturating_add(yoe / 4)
+        .saturating_sub(yoe / 100)
+        .saturating_add(doy);
+    era.saturating_mul(146_097)
+        .saturating_add(doe)
+        .saturating_sub(719_468)
 }
 
 /// Civil date for days since 1970-01-01 (Howard Hinnant's `civil_from_days`).
@@ -64,12 +76,28 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
     let z = days.saturating_add(719_468);
     let era = z / 146_097;
     let doe = z % 146_097;
-    let yoe = doe.saturating_sub(doe / 1_460).saturating_add(doe / 36_524).saturating_sub(doe / 146_096) / 365;
-    let doy = doe.saturating_sub(yoe.saturating_mul(365).saturating_add(yoe / 4).saturating_sub(yoe / 100));
+    let yoe = doe
+        .saturating_sub(doe / 1_460)
+        .saturating_add(doe / 36_524)
+        .saturating_sub(doe / 146_096)
+        / 365;
+    let doy = doe.saturating_sub(
+        yoe.saturating_mul(365)
+            .saturating_add(yoe / 4)
+            .saturating_sub(yoe / 100),
+    );
     let mp = doy.saturating_mul(5).saturating_add(2) / 153;
-    let day = doy.saturating_sub(mp.saturating_mul(153).saturating_add(2) / 5).saturating_add(1);
-    let month = if mp < 10 { mp.saturating_add(3) } else { mp.saturating_sub(9) };
-    let year = yoe.saturating_add(era.saturating_mul(400)).saturating_add(i64::from(month <= 2));
+    let day = doy
+        .saturating_sub(mp.saturating_mul(153).saturating_add(2) / 5)
+        .saturating_add(1);
+    let month = if mp < 10 {
+        mp.saturating_add(3)
+    } else {
+        mp.saturating_sub(9)
+    };
+    let year = yoe
+        .saturating_add(era.saturating_mul(400))
+        .saturating_add(i64::from(month <= 2));
     (
         i32::try_from(year).unwrap_or(0),
         u32::try_from(month).unwrap_or(0),
@@ -107,7 +135,10 @@ impl Date {
     /// # Errors
     /// [`CoreError::InvalidTime`] if the date does not exist or the year is outside 1–9999.
     pub fn from_ymd(year: i32, month: u32, day: u32) -> Result<Self, CoreError> {
-        let err = |reason| CoreError::InvalidTime { input: format!("{year}-{month}-{day}"), reason };
+        let err = |reason| CoreError::InvalidTime {
+            input: format!("{year}-{month}-{day}"),
+            reason,
+        };
         if !(1..=9999).contains(&year) {
             return Err(err("year must be between 1 and 9999"));
         }
@@ -117,7 +148,9 @@ impl Date {
         if day < 1 || day > days_in_month(year, month) {
             return Err(err("day does not exist in that month"));
         }
-        Ok(Date(i32::try_from(days_from_civil(year, month, day)).unwrap_or(0)))
+        Ok(Date(
+            i32::try_from(days_from_civil(year, month, day)).unwrap_or(0),
+        ))
     }
 
     /// Builds a date from days since 1970-01-01.
@@ -171,7 +204,9 @@ impl Date {
     /// The date `days` later (or earlier when negative); `None` if out of range.
     #[must_use]
     pub fn checked_add_days(self, days: i32) -> Option<Date> {
-        self.0.checked_add(days).and_then(|d| Date::from_days(d).ok())
+        self.0
+            .checked_add(days)
+            .and_then(|d| Date::from_days(d).ok())
     }
 }
 
@@ -193,11 +228,23 @@ impl FromStr for Date {
 
     /// Parses the strict form `YYYY-MM-DD`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let err = || CoreError::InvalidTime { input: clip(s), reason: "expected YYYY-MM-DD" };
+        let err = || CoreError::InvalidTime {
+            input: clip(s),
+            reason: "expected YYYY-MM-DD",
+        };
         let mut parts = s.splitn(3, '-');
-        let year = parts.next().and_then(|p| fixed_digits(p, 4)).ok_or_else(err)?;
-        let month = parts.next().and_then(|p| fixed_digits(p, 2)).ok_or_else(err)?;
-        let day = parts.next().and_then(|p| fixed_digits(p, 2)).ok_or_else(err)?;
+        let year = parts
+            .next()
+            .and_then(|p| fixed_digits(p, 4))
+            .ok_or_else(err)?;
+        let month = parts
+            .next()
+            .and_then(|p| fixed_digits(p, 2))
+            .ok_or_else(err)?;
+        let day = parts
+            .next()
+            .and_then(|p| fixed_digits(p, 2))
+            .ok_or_else(err)?;
         Date::from_ymd(i32::try_from(year).unwrap_or(0), month, day)
     }
 }
@@ -267,7 +314,9 @@ impl Timestamp {
     /// This instant shifted by a duration; `None` if the result is out of range.
     #[must_use]
     pub fn checked_add(self, duration: DurationMs) -> Option<Timestamp> {
-        self.0.checked_add(duration.0).and_then(|ms| Timestamp::from_millis(ms).ok())
+        self.0
+            .checked_add(duration.0)
+            .and_then(|ms| Timestamp::from_millis(ms).ok())
     }
 
     /// `self - earlier` as a duration (negative if `earlier` is later).
@@ -295,8 +344,13 @@ impl Timestamp {
 }
 
 fn parse_timestamp(s: &str, strict: bool) -> Result<Timestamp, CoreError> {
-    let err = |reason| CoreError::InvalidTime { input: clip(s), reason };
-    let date_text = s.get(..10).ok_or_else(|| err("expected a date YYYY-MM-DD"))?;
+    let err = |reason| CoreError::InvalidTime {
+        input: clip(s),
+        reason,
+    };
+    let date_text = s
+        .get(..10)
+        .ok_or_else(|| err("expected a date YYYY-MM-DD"))?;
     let date: Date = date_text.parse()?;
     let rest = s.get(10..).unwrap_or("");
     if rest.is_empty() {
@@ -315,7 +369,10 @@ fn parse_timestamp(s: &str, strict: bool) -> Result<Timestamp, CoreError> {
     // Split the clock from the offset.
     let offset_at = after_sep.find(['Z', '+', '-']);
     let (clock, offset_text) = match offset_at {
-        Some(at) => (after_sep.get(..at).unwrap_or(""), after_sep.get(at..).unwrap_or("")),
+        Some(at) => (
+            after_sep.get(..at).unwrap_or(""),
+            after_sep.get(at..).unwrap_or(""),
+        ),
         None => (after_sep, ""),
     };
     let offset_minutes: i64 = if offset_text.is_empty() {
@@ -328,13 +385,17 @@ fn parse_timestamp(s: &str, strict: bool) -> Result<Timestamp, CoreError> {
     } else {
         let negative = offset_text.starts_with('-');
         let body = offset_text.get(1..).unwrap_or("");
-        let (hh, mm) = body.split_once(':').ok_or_else(|| err("offset must be ±HH:MM"))?;
+        let (hh, mm) = body
+            .split_once(':')
+            .ok_or_else(|| err("offset must be ±HH:MM"))?;
         let hh = fixed_digits(hh, 2).ok_or_else(|| err("offset must be ±HH:MM"))?;
         let mm = fixed_digits(mm, 2).ok_or_else(|| err("offset must be ±HH:MM"))?;
         if hh > 23 || mm > 59 {
             return Err(err("offset out of range"));
         }
-        let total = i64::from(hh).saturating_mul(60).saturating_add(i64::from(mm));
+        let total = i64::from(hh)
+            .saturating_mul(60)
+            .saturating_add(i64::from(mm));
         if negative {
             total.saturating_neg()
         } else {
@@ -347,8 +408,14 @@ fn parse_timestamp(s: &str, strict: bool) -> Result<Timestamp, CoreError> {
         None => (clock, None),
     };
     let mut parts = hms.split(':');
-    let hour = parts.next().and_then(|p| fixed_digits(p, 2)).ok_or_else(|| err("expected HH:MM"))?;
-    let minute = parts.next().and_then(|p| fixed_digits(p, 2)).ok_or_else(|| err("expected HH:MM"))?;
+    let hour = parts
+        .next()
+        .and_then(|p| fixed_digits(p, 2))
+        .ok_or_else(|| err("expected HH:MM"))?;
+    let minute = parts
+        .next()
+        .and_then(|p| fixed_digits(p, 2))
+        .ok_or_else(|| err("expected HH:MM"))?;
     let second = match parts.next() {
         Some(p) => Some(fixed_digits(p, 2).ok_or_else(|| err("seconds must be two digits"))?),
         None => None,
@@ -365,7 +432,11 @@ fn parse_timestamp(s: &str, strict: bool) -> Result<Timestamp, CoreError> {
     let millis = match fraction {
         None => 0,
         Some(f) => {
-            if second.is_none() || f.is_empty() || f.len() > 9 || !f.bytes().all(|b| b.is_ascii_digit()) {
+            if second.is_none()
+                || f.is_empty()
+                || f.len() > 9
+                || !f.bytes().all(|b| b.is_ascii_digit())
+            {
                 return Err(err("fraction must be 1 to 9 digits after the seconds"));
             }
             let padded: String = f.chars().chain("00".chars()).take(3).collect();
@@ -386,7 +457,12 @@ impl fmt::Display for Timestamp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (y, mo, d) = self.date().ymd();
         let ms = self.millis_of_day();
-        let (h, mi, s, frac) = (ms / 3_600_000, ms / 60_000 % 60, ms / 1_000 % 60, ms % 1_000);
+        let (h, mi, s, frac) = (
+            ms / 3_600_000,
+            ms / 60_000 % 60,
+            ms / 1_000 % 60,
+            ms % 1_000,
+        );
         write!(f, "{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{frac:03}Z")
     }
 }
@@ -427,7 +503,9 @@ impl<'de> serde::Deserialize<'de> for Timestamp {
 ///
 /// Text form (ISO 8601 with hours as the largest unit): `PT1H30M`, `PT0.5S`, `-PT2H`, `PT0S`.
 /// Serde form: the integer.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 #[serde(transparent)]
 pub struct DurationMs(i64);
 
@@ -457,7 +535,12 @@ impl DurationMs {
 impl fmt::Display for DurationMs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let abs = self.0.unsigned_abs();
-        let (h, m, s, ms) = (abs / 3_600_000, abs / 60_000 % 60, abs / 1_000 % 60, abs % 1_000);
+        let (h, m, s, ms) = (
+            abs / 3_600_000,
+            abs / 60_000 % 60,
+            abs / 1_000 % 60,
+            abs % 1_000,
+        );
         if self.0 < 0 {
             f.write_str("-")?;
         }
@@ -485,7 +568,11 @@ impl fmt::Debug for DurationMs {
 }
 
 const ISO_DATE_UNITS: &[(&str, i64)] = &[("D", MS_PER_DAY)];
-const ISO_TIME_UNITS: &[(&str, i64)] = &[("H", MS_PER_HOUR), ("M", MS_PER_MINUTE), ("S", MS_PER_SECOND)];
+const ISO_TIME_UNITS: &[(&str, i64)] = &[
+    ("H", MS_PER_HOUR),
+    ("M", MS_PER_MINUTE),
+    ("S", MS_PER_SECOND),
+];
 const PLAIN_UNITS: &[(&str, i64)] = &[
     ("d", MS_PER_DAY),
     ("h", MS_PER_HOUR),
@@ -514,12 +601,22 @@ fn sum_components(text: &str, units: &[(&str, i64)], fold_case: bool) -> Option<
     let mut count = 0_u32;
     let mut last_size = i64::MAX;
     while !rest.is_empty() {
-        let number_len = rest.bytes().take_while(|b| b.is_ascii_digit() || *b == b'.').count();
+        let number_len = rest
+            .bytes()
+            .take_while(|b| b.is_ascii_digit() || *b == b'.')
+            .count();
         let number = rest.get(..number_len)?;
         let after_number = rest.get(number_len..)?;
-        let unit_len = after_number.bytes().take_while(u8::is_ascii_alphabetic).count();
+        let unit_len = after_number
+            .bytes()
+            .take_while(u8::is_ascii_alphabetic)
+            .count();
         let unit_raw = after_number.get(..unit_len)?;
-        let unit = if fold_case { unit_raw.to_ascii_lowercase() } else { unit_raw.to_owned() };
+        let unit = if fold_case {
+            unit_raw.to_ascii_lowercase()
+        } else {
+            unit_raw.to_owned()
+        };
         let (_, size) = units.iter().find(|(name, _)| *name == unit)?;
         if *size >= last_size {
             return None;
@@ -553,7 +650,9 @@ fn parse_clock_duration(text: &str) -> Option<i64> {
             component_ms(sec, MS_PER_SECOND)?
         }
     };
-    hours.checked_add(i64::from(minutes).checked_mul(MS_PER_MINUTE)?)?.checked_add(seconds_ms)
+    hours
+        .checked_add(i64::from(minutes).checked_mul(MS_PER_MINUTE)?)?
+        .checked_add(seconds_ms)
 }
 
 impl FromStr for DurationMs {
@@ -569,7 +668,10 @@ impl FromStr for DurationMs {
     /// A bare number is rejected because its unit would be a guess. Every component must be a
     /// whole number of milliseconds.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let err = || CoreError::InvalidTime { input: clip(s), reason: "expected a duration such as 1h30m, 1:30 or PT1H30M" };
+        let err = || CoreError::InvalidTime {
+            input: clip(s),
+            reason: "expected a duration such as 1h30m, 1:30 or PT1H30M",
+        };
         let trimmed = s.trim();
         let (negative, body) = match trimmed.strip_prefix('-') {
             Some(rest) => (true, rest),
@@ -580,7 +682,11 @@ impl FromStr for DurationMs {
                 Some((date_part, time_part)) => (date_part, Some(time_part)),
                 None => (iso, None),
             };
-            let days = if date_part.is_empty() { Some(0) } else { sum_components(date_part, ISO_DATE_UNITS, false) };
+            let days = if date_part.is_empty() {
+                Some(0)
+            } else {
+                sum_components(date_part, ISO_DATE_UNITS, false)
+            };
             let time = match time_part {
                 None => (!date_part.is_empty()).then_some(0),
                 Some(t) => sum_components(t, ISO_TIME_UNITS, false),
@@ -595,7 +701,11 @@ impl FromStr for DurationMs {
             sum_components(body, PLAIN_UNITS, true)
         };
         let magnitude = magnitude.ok_or_else(err)?;
-        let signed = if negative { magnitude.checked_neg() } else { Some(magnitude) };
+        let signed = if negative {
+            magnitude.checked_neg()
+        } else {
+            Some(magnitude)
+        };
         signed.map(DurationMs).ok_or_else(err)
     }
 }
@@ -684,7 +794,20 @@ mod tests {
         assert!(Date::from_ymd(2023, 4, 0).is_err());
         assert!(Date::from_ymd(0, 1, 1).is_err());
         assert!(Date::from_ymd(10_000, 1, 1).is_err());
-        for bad in ["", "2024", "2024-1-01", "2024-01-1", "24-01-01", "2024/01/01", "2024-01-01 ", "2024-01-01-01", "abcd-01-01", "+024-01-01", "2024-02-30", "0000-01-01"] {
+        for bad in [
+            "",
+            "2024",
+            "2024-1-01",
+            "2024-01-1",
+            "24-01-01",
+            "2024/01/01",
+            "2024-01-01 ",
+            "2024-01-01-01",
+            "abcd-01-01",
+            "+024-01-01",
+            "2024-02-30",
+            "0000-01-01",
+        ] {
             assert!(bad.parse::<Date>().is_err(), "{bad:?}");
         }
         assert!(serde_json::from_str::<Date>("\"2024-13-01\"").is_err());
@@ -705,7 +828,10 @@ mod tests {
         assert_eq!(ts("2024-05-06T07:08:09.1Z").millis(), 1_714_979_289_100);
         assert_eq!(ts("2024-05-06T07:08:09.123999999Z"), t);
         assert_eq!(serde_json::to_string(&t).unwrap(), "1714979289123");
-        assert_eq!(serde_json::from_str::<Timestamp>("1714979289123").unwrap(), t);
+        assert_eq!(
+            serde_json::from_str::<Timestamp>("1714979289123").unwrap(),
+            t
+        );
         assert_eq!(Timestamp::EPOCH.to_string(), "1970-01-01T00:00:00.000Z");
     }
 
@@ -715,8 +841,14 @@ mod tests {
         assert_eq!(Timestamp::parse_lenient("2024-05-06 07:08").unwrap(), t);
         assert_eq!(Timestamp::parse_lenient(" 2024-05-06T07:08 ").unwrap(), t);
         assert_eq!(Timestamp::parse_lenient("2024-05-06 07:08:00").unwrap(), t);
-        assert_eq!(Timestamp::parse_lenient("2024-05-06 16:08+09:00").unwrap(), t);
-        assert_eq!(Timestamp::parse_lenient("2024-05-06").unwrap(), ts("2024-05-06T00:00:00Z"));
+        assert_eq!(
+            Timestamp::parse_lenient("2024-05-06 16:08+09:00").unwrap(),
+            t
+        );
+        assert_eq!(
+            Timestamp::parse_lenient("2024-05-06").unwrap(),
+            ts("2024-05-06T00:00:00Z")
+        );
         assert_eq!(Timestamp::parse_lenient("2024-05-06T07:08:00Z").unwrap(), t);
     }
 
@@ -743,11 +875,17 @@ mod tests {
         assert_eq!(before_epoch.date().to_string(), "1969-12-31");
         assert_eq!(before_epoch.millis_of_day(), 86_399_999);
         assert_eq!(Timestamp::MAX.checked_add(DurationMs::from_millis(1)), None);
-        assert_eq!(Timestamp::MAX.checked_add(DurationMs::from_millis(i64::MAX)), None);
+        assert_eq!(
+            Timestamp::MAX.checked_add(DurationMs::from_millis(i64::MAX)),
+            None
+        );
         // Offsets can push a representable local time out of range.
         assert!("0001-01-01T00:00:00+01:00".parse::<Timestamp>().is_err());
         assert!("9999-12-31T23:59:59-01:00".parse::<Timestamp>().is_err());
-        assert_eq!(Timestamp::MAX.duration_since(Timestamp::MIN).millis(), 315_537_897_599_999);
+        assert_eq!(
+            Timestamp::MAX.duration_since(Timestamp::MIN).millis(),
+            315_537_897_599_999
+        );
     }
 
     #[test]
@@ -781,7 +919,14 @@ mod tests {
         ] {
             assert!(bad.parse::<Timestamp>().is_err(), "{bad:?}");
         }
-        for bad in ["", "2024", "2024-05-06 07", "2024-05-06 07:08.5", "2024-05-06_07:08", "yesterday"] {
+        for bad in [
+            "",
+            "2024",
+            "2024-05-06 07",
+            "2024-05-06 07:08.5",
+            "2024-05-06_07:08",
+            "yesterday",
+        ] {
             assert!(Timestamp::parse_lenient(bad).is_err(), "{bad:?}");
         }
         assert!(serde_json::from_str::<Timestamp>("999999999999999999").is_err());
@@ -794,25 +939,40 @@ mod tests {
         assert_eq!(DurationMs::from_millis(5_400_000).to_string(), "PT1H30M");
         assert_eq!(DurationMs::from_millis(500).to_string(), "PT0.5S");
         assert_eq!(DurationMs::from_millis(-7_200_000).to_string(), "-PT2H");
-        assert_eq!(DurationMs::from_millis(3_661_001).to_string(), "PT1H1M1.001S");
+        assert_eq!(
+            DurationMs::from_millis(3_661_001).to_string(),
+            "PT1H1M1.001S"
+        );
         assert_eq!(DurationMs::from_millis(60_000).to_string(), "PT1M");
         assert_eq!(DurationMs::from_millis(59_000).to_string(), "PT59S");
         assert_eq!(format!("{:?}", DurationMs::from_millis(1_000)), "PT1S");
         assert_eq!(DurationMs::default(), DurationMs::ZERO);
-        assert_eq!(serde_json::to_string(&DurationMs::from_millis(5)).unwrap(), "5");
-        assert_eq!(serde_json::from_str::<DurationMs>("-5").unwrap().millis(), -5);
+        assert_eq!(
+            serde_json::to_string(&DurationMs::from_millis(5)).unwrap(),
+            "5"
+        );
+        assert_eq!(
+            serde_json::from_str::<DurationMs>("-5").unwrap().millis(),
+            -5
+        );
     }
 
     #[test]
     fn std_duration_parse_all_notations() {
         assert_eq!(dur("PT1H30M"), 5_400_000);
-        assert_eq!(dur("P1DT2H30M15.5S"), 86_400_000 + 7_200_000 + 1_800_000 + 15_500);
+        assert_eq!(
+            dur("P1DT2H30M15.5S"),
+            86_400_000 + 7_200_000 + 1_800_000 + 15_500
+        );
         assert_eq!(dur("P2D"), 172_800_000);
         assert_eq!(dur("PT0S"), 0);
         assert_eq!(dur("-PT2H"), -7_200_000);
         assert_eq!(dur("1h30m"), 5_400_000);
         assert_eq!(dur("1h 30m"), 5_400_000);
-        assert_eq!(dur(" 1d 2h 3m 4s 5ms "), 86_400_000 + 7_200_000 + 180_000 + 4_000 + 5);
+        assert_eq!(
+            dur(" 1d 2h 3m 4s 5ms "),
+            86_400_000 + 7_200_000 + 180_000 + 4_000 + 5
+        );
         assert_eq!(dur("1.5h"), 5_400_000);
         assert_eq!(dur("90min"), 5_400_000);
         assert_eq!(dur("45sec"), 45_000);
@@ -828,14 +988,23 @@ mod tests {
     #[test]
     fn std_duration_arithmetic() {
         let a = DurationMs::from_millis(5);
-        assert_eq!(a.checked_add(DurationMs::from_millis(7)), Some(DurationMs::from_millis(12)));
+        assert_eq!(
+            a.checked_add(DurationMs::from_millis(7)),
+            Some(DurationMs::from_millis(12))
+        );
         assert_eq!(DurationMs::from_millis(i64::MAX).checked_add(a), None);
     }
 
     #[test]
     fn edge_duration_extremes() {
-        assert_eq!(DurationMs::from_millis(i64::MAX).to_string(), "PT2562047788015H12M55.807S");
-        assert_eq!(DurationMs::from_millis(i64::MIN).to_string(), "-PT2562047788015H12M55.808S");
+        assert_eq!(
+            DurationMs::from_millis(i64::MAX).to_string(),
+            "PT2562047788015H12M55.807S"
+        );
+        assert_eq!(
+            DurationMs::from_millis(i64::MIN).to_string(),
+            "-PT2562047788015H12M55.808S"
+        );
         let round: DurationMs = "PT2562047788015H12M55.807S".parse().unwrap();
         assert_eq!(round.millis(), i64::MAX);
         // i64::MIN magnitude does not fit a positive i64, so the text form of MIN is rejected.
@@ -848,9 +1017,38 @@ mod tests {
     #[test]
     fn invalid_durations() {
         for bad in [
-            "", "-", "5", "1.5", "h", "1x", "1h1h", "30m1h", "1h30", "1.0005s", "0.5ms", "PT", "P", "P1H", "PT1D",
-            "pt1h", "PT1h", "PT 1H", "P1D T1H", "1:3", "1:60", "1:30:60", "1:30:5", ":30", "1:30:15:00",
-            "1.5:30", "a:30", "1:30:1a", "--1h", "1 h x", "1..5h", "PT1M1H",
+            "",
+            "-",
+            "5",
+            "1.5",
+            "h",
+            "1x",
+            "1h1h",
+            "30m1h",
+            "1h30",
+            "1.0005s",
+            "0.5ms",
+            "PT",
+            "P",
+            "P1H",
+            "PT1D",
+            "pt1h",
+            "PT1h",
+            "PT 1H",
+            "P1D T1H",
+            "1:3",
+            "1:60",
+            "1:30:60",
+            "1:30:5",
+            ":30",
+            "1:30:15:00",
+            "1.5:30",
+            "a:30",
+            "1:30:1a",
+            "--1h",
+            "1 h x",
+            "1..5h",
+            "PT1M1H",
         ] {
             assert!(bad.parse::<DurationMs>().is_err(), "{bad:?}");
         }

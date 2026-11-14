@@ -79,7 +79,11 @@ fn decode_body(body: &str) -> Result<u128, &'static str> {
 }
 
 fn parse_with_prefix(prefix: &'static str, input: &str) -> Result<u128, CoreError> {
-    let err = |reason| CoreError::InvalidId { kind: prefix, input: clip(input), reason };
+    let err = |reason| CoreError::InvalidId {
+        kind: prefix,
+        input: clip(input),
+        reason,
+    };
     let body = input
         .strip_prefix(prefix)
         .and_then(|rest| rest.strip_prefix('_'))
@@ -311,10 +315,22 @@ mod tests {
     #[test]
     fn std_golden_vector() {
         // 0 time, zero random -> all zeros; max -> 7zzz…
-        assert_eq!(OpId::from_u128(0).to_string(), "op_00000000000000000000000000");
-        assert_eq!(OpId::from_u128(u128::MAX).to_string(), "op_7zzzzzzzzzzzzzzzzzzzzzzzzz");
-        assert_eq!(OpId::from_u128(31).to_string(), "op_0000000000000000000000000z");
-        assert_eq!(OpId::from_u128(32).to_string(), "op_00000000000000000000000010");
+        assert_eq!(
+            OpId::from_u128(0).to_string(),
+            "op_00000000000000000000000000"
+        );
+        assert_eq!(
+            OpId::from_u128(u128::MAX).to_string(),
+            "op_7zzzzzzzzzzzzzzzzzzzzzzzzz"
+        );
+        assert_eq!(
+            OpId::from_u128(31).to_string(),
+            "op_0000000000000000000000000z"
+        );
+        assert_eq!(
+            OpId::from_u128(32).to_string(),
+            "op_00000000000000000000000010"
+        );
     }
 
     #[test]
@@ -343,14 +359,21 @@ mod tests {
     fn std_kinds_and_prefixes_are_unique() {
         let mut seen = std::collections::BTreeSet::new();
         for kind in IdKind::ALL {
-            assert!(seen.insert(kind.prefix()), "duplicate prefix {}", kind.prefix());
+            assert!(
+                seen.insert(kind.prefix()),
+                "duplicate prefix {}",
+                kind.prefix()
+            );
             assert!(kind.prefix().bytes().all(|b| b.is_ascii_lowercase()));
             assert_eq!(IdKind::from_prefix(kind.prefix()), Some(*kind));
         }
         assert_eq!(IdKind::ALL.len(), 33);
         assert_eq!(RecordId::KIND, IdKind::Record);
         assert_eq!(RecordId::PREFIX, "rec");
-        assert_eq!(IdKind::of("rec_00000000000000000000000005"), Some(IdKind::Record));
+        assert_eq!(
+            IdKind::of("rec_00000000000000000000000005"),
+            Some(IdKind::Record)
+        );
     }
 
     #[test]
@@ -375,17 +398,17 @@ mod tests {
             "",
             "rec",
             "rec_",
-            "fld_00000000000000000000000005",   // wrong prefix
-            "rec-00000000000000000000000005",   // wrong separator
-            "rec_0000000000000000000000005",    // 25 chars
-            "rec_000000000000000000000000055",  // 27 chars
-            "rec_0000000000000000000000000Z",   // upper case
-            "rec_0000000000000000000000000i",   // excluded letter
+            "fld_00000000000000000000000005",  // wrong prefix
+            "rec-00000000000000000000000005",  // wrong separator
+            "rec_0000000000000000000000005",   // 25 chars
+            "rec_000000000000000000000000055", // 27 chars
+            "rec_0000000000000000000000000Z",  // upper case
+            "rec_0000000000000000000000000i",  // excluded letter
             "rec_0000000000000000000000000l",
             "rec_0000000000000000000000000o",
             "rec_0000000000000000000000000u",
-            "rec_80000000000000000000000000",   // overflow
-            "rec_0000000000000000000000000é",   // non-ASCII (27 bytes)
+            "rec_80000000000000000000000000", // overflow
+            "rec_0000000000000000000000000é", // non-ASCII (27 bytes)
             " rec_00000000000000000000000005",
         ] {
             assert!(bad.parse::<RecordId>().is_err(), "{bad} should be rejected");

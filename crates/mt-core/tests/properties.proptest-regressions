@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e4ba8ca9cd2ba5818e15f8563a5b85f2f587b8d545a932f92b4fafbb5028472b # shrinks to value = MultiReference([]), to = Json
+cc f93b7188329163128591923653cc6575c09325dd2b2e82af7fbae254b4209b95 # shrinks to value = MultiReference([]), to = Number

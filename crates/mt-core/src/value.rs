@@ -244,8 +244,14 @@ impl Value {
             Value::Number(d) | Value::Percent(d) => J::String(canonical_string(d)),
             Value::Money(m) => {
                 let mut map = serde_json::Map::new();
-                map.insert("amount".to_owned(), J::String(canonical_string(&m.amount())));
-                map.insert("currency".to_owned(), J::String(m.currency().code().to_owned()));
+                map.insert(
+                    "amount".to_owned(),
+                    J::String(canonical_string(&m.amount())),
+                );
+                map.insert(
+                    "currency".to_owned(),
+                    J::String(m.currency().code().to_owned()),
+                );
                 J::Object(map)
             }
             Value::Bool(b) => J::Bool(*b),
@@ -425,7 +431,10 @@ mod tests {
             serde_json::json!("2024-05-06T07:08:09.123Z"),
             serde_json::json!(5_400_000),
             serde_json::json!("rfi_00000000000000000000000001"),
-            serde_json::json!(["rfi_00000000000000000000000001", "rfi_00000000000000000000000002"]),
+            serde_json::json!([
+                "rfi_00000000000000000000000001",
+                "rfi_00000000000000000000000002"
+            ]),
             serde_json::json!(["rec_00000000000000000000000003"]),
             serde_json::json!(["prn_00000000000000000000000004"]),
             serde_json::json!(["att_00000000000000000000000005"]),
@@ -480,14 +489,25 @@ mod tests {
         assert!(!Value::Number(dec("0")).is_empty());
         let n = Value::Number(Decimal::new(1500, 3)).normalized();
         assert_eq!(n.to_string(), "1.5");
-        assert_eq!(Value::Percent(Decimal::new(2500, 4)).normalized().to_string(), "25%");
+        assert_eq!(
+            Value::Percent(Decimal::new(2500, 4))
+                .normalized()
+                .to_string(),
+            "25%"
+        );
         // Equality ignores trailing zeros.
-        assert_eq!(Value::Number(Decimal::new(1500, 3)), Value::Number(dec("1.5")));
+        assert_eq!(
+            Value::Number(Decimal::new(1500, 3)),
+            Value::Number(dec("1.5"))
+        );
     }
 
     #[test]
     fn edge_percent_overflow_falls_back() {
-        assert_eq!(percent_string(&Decimal::MAX), "79228162514264337593543950335");
+        assert_eq!(
+            percent_string(&Decimal::MAX),
+            "79228162514264337593543950335"
+        );
         assert_eq!(percent_string(&dec("-0.005")), "-0.5%");
     }
 

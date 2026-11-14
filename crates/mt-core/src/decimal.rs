@@ -62,7 +62,10 @@ pub fn decimal_places(value: &Decimal) -> u32 {
 /// [`CoreError::InvalidDecimal`] if the text is malformed, has more than 28 decimal places, or
 /// does not fit 96 bits.
 pub fn parse_decimal(input: &str) -> Result<Decimal, CoreError> {
-    let err = |reason| CoreError::InvalidDecimal { input: clip(input), reason };
+    let err = |reason| CoreError::InvalidDecimal {
+        input: clip(input),
+        reason,
+    };
     let unsigned = input.strip_prefix('-').unwrap_or(input);
     let (int_part, frac_part) = match unsigned.split_once('.') {
         Some((int_part, frac_part)) => (int_part, Some(frac_part)),
@@ -96,7 +99,10 @@ pub mod serde_canonical {
     ///
     /// # Errors
     /// Only those of the serializer.
-    pub fn serialize<S: serde::Serializer>(value: &Decimal, serializer: S) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: serde::Serializer>(
+        value: &Decimal,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&canonical_string(value))
     }
 
@@ -104,7 +110,9 @@ pub mod serde_canonical {
     ///
     /// # Errors
     /// If the input is not a string holding a plain decimal.
-    pub fn deserialize<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Decimal, D::Error> {
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Decimal, D::Error> {
         let text = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
         parse_decimal(&text).map_err(serde::de::Error::custom)
     }
@@ -119,7 +127,10 @@ pub mod serde_canonical_opt {
     ///
     /// # Errors
     /// Only those of the serializer.
-    pub fn serialize<S: serde::Serializer>(value: &Option<Decimal>, serializer: S) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: serde::Serializer>(
+        value: &Option<Decimal>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         match value {
             Some(d) => serializer.serialize_some(&canonical_string(d)),
             None => serializer.serialize_none(),
@@ -130,10 +141,14 @@ pub mod serde_canonical_opt {
     ///
     /// # Errors
     /// If the input is neither `null` nor a string holding a plain decimal.
-    pub fn deserialize<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Decimal>, D::Error> {
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Decimal>, D::Error> {
         let text = <Option<std::borrow::Cow<'de, str>>>::deserialize(deserializer)?;
         match text {
-            Some(t) => parse_decimal(&t).map(Some).map_err(serde::de::Error::custom),
+            Some(t) => parse_decimal(&t)
+                .map(Some)
+                .map_err(serde::de::Error::custom),
             None => Ok(None),
         }
     }
@@ -181,7 +196,10 @@ mod tests {
 
     #[test]
     fn std_serde_strings_only() {
-        let h = Holder { a: d("1.50"), b: Some(d("2")) };
+        let h = Holder {
+            a: d("1.50"),
+            b: Some(d("2")),
+        };
         let json = serde_json::to_string(&h).unwrap();
         assert_eq!(json, r#"{"a":"1.5","b":"2"}"#);
         assert_eq!(serde_json::from_str::<Holder>(&json).unwrap(), h);
@@ -201,7 +219,10 @@ mod tests {
 
     #[test]
     fn invalid_parse() {
-        for bad in ["", "-", ".", "1.", ".5", "+1", "1e3", "1,000", " 1", "1 ", "--1", "1.2.3", "0x10", "１"] {
+        for bad in [
+            "", "-", ".", "1.", ".5", "+1", "1e3", "1,000", " 1", "1 ", "--1", "1.2.3", "0x10",
+            "１",
+        ] {
             assert!(parse_decimal(bad).is_err(), "{bad:?}");
         }
     }

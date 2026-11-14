@@ -139,15 +139,33 @@ mod tests {
 
     #[test]
     fn std_errors_display() {
-        let e = CoreError::InvalidId { kind: "rec", input: "x".into(), reason: "bad" };
+        let e = CoreError::InvalidId {
+            kind: "rec",
+            input: "x".into(),
+            reason: "bad",
+        };
         assert_eq!(e.to_string(), "invalid rec id `x`: bad");
-        assert_eq!(CoreError::TimeOutOfRange(5).to_string(), "time value 5 is out of the supported range");
-        let e = CoreError::MoneyScale { currency: "JPY", max_decimals: 0, actual: 2 };
+        assert_eq!(
+            CoreError::TimeOutOfRange(5).to_string(),
+            "time value 5 is out of the supported range"
+        );
+        let e = CoreError::MoneyScale {
+            currency: "JPY",
+            max_decimals: 0,
+            actual: 2,
+        };
         assert!(e.to_string().contains("JPY allows 0"));
-        let e = CoreError::Conversion { from: DataType::Bool, to: DataType::Date, reason: "no" };
+        let e = CoreError::Conversion {
+            from: DataType::Bool,
+            to: DataType::Date,
+            reason: "no",
+        };
         assert_eq!(e.to_string(), "cannot convert bool to date: no");
         assert!(CoreError::Overflow("adding").to_string().contains("adding"));
-        let e = CoreError::InvalidTransition { from: "accepted", action: "reject" };
+        let e = CoreError::InvalidTransition {
+            from: "accepted",
+            action: "reject",
+        };
         assert!(e.to_string().contains("accepted"));
     }
 }
