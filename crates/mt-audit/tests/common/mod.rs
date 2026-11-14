@@ -1,5 +1,10 @@
 //! Shared test helpers: a tiny seeded generator (no external randomness) and fixtures.
-#![allow(dead_code, clippy::arithmetic_side_effects, clippy::unwrap_used, clippy::indexing_slicing)]
+#![allow(
+    dead_code,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used,
+    clippy::indexing_slicing
+)]
 
 use mt_audit::{
     AuditDraft, AuditEntry, AuditLog, HmacSha256Signer, InMemoryAuditStore, ObjectRef, Principal,

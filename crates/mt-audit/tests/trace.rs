@@ -1,5 +1,9 @@
 //! Trace context tests: standard, edge, invalid, property.
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects
+)]
 
 use mt_audit::{AuditError, SpanId, TraceContext, TraceFlags, TraceId};
 use proptest::prelude::*;
@@ -27,7 +31,10 @@ fn standard_child_keeps_trace_and_flags() {
     assert_eq!(child.context.trace_id, ctx.trace_id);
     assert_eq!(child.context.span_id, new_span);
     assert_eq!(child.context.flags, ctx.flags);
-    assert_eq!(child.context.to_string(), "00-4bf92f3577b34da6a3ce929d0e0e4736-0102030405060708-01");
+    assert_eq!(
+        child.context.to_string(),
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-0102030405060708-01"
+    );
 }
 
 #[test]
@@ -38,7 +45,10 @@ fn standard_new_and_accessors() {
     assert!(!ctx.flags.is_sampled());
     assert_eq!(t.as_bytes(), &[9; 16]);
     assert_eq!(s.as_bytes(), &[7; 8]);
-    assert_eq!(ctx.to_string(), format!("00-{}-{}-00", "09".repeat(16), "07".repeat(8)));
+    assert_eq!(
+        ctx.to_string(),
+        format!("00-{}-{}-00", "09".repeat(16), "07".repeat(8))
+    );
 }
 
 #[test]
@@ -50,7 +60,10 @@ fn standard_serde_round_trip() {
     let id: TraceId = serde_json::from_str("\"4bf92f3577b34da6a3ce929d0e0e4736\"").unwrap();
     assert_eq!(id, ctx.trace_id);
     let span: SpanId = serde_json::from_str("\"00f067aa0ba902b7\"").unwrap();
-    assert_eq!(serde_json::to_string(&span).unwrap(), "\"00f067aa0ba902b7\"");
+    assert_eq!(
+        serde_json::to_string(&span).unwrap(),
+        "\"00f067aa0ba902b7\""
+    );
     assert!(serde_json::from_str::<TraceId>("\"zz\"").is_err());
     assert!(serde_json::from_str::<TraceId>("5").is_err());
 }
@@ -59,7 +72,8 @@ fn standard_serde_round_trip() {
 
 #[test]
 fn edge_unknown_flag_bits_are_preserved() {
-    let ctx = TraceContext::parse("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-fe").unwrap();
+    let ctx =
+        TraceContext::parse("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-fe").unwrap();
     assert_eq!(ctx.flags, TraceFlags(0xfe));
     assert!(!ctx.flags.is_sampled());
     assert!(ctx.to_string().ends_with("-fe"));
@@ -104,7 +118,10 @@ fn invalid_headers_are_rejected() {
     ];
     for case in cases {
         let result = TraceContext::parse(case);
-        assert!(matches!(result, Err(AuditError::InvalidTraceparent(_))), "accepted {case:?}");
+        assert!(
+            matches!(result, Err(AuditError::InvalidTraceparent(_))),
+            "accepted {case:?}"
+        );
     }
 }
 

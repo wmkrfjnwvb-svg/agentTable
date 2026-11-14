@@ -13,7 +13,7 @@
 //!   dead *renews* (raises its incarnation) and thereby rejoins as a new instance;
 //! * facts are merged with a total order (see `Update::precedence`), so views converge;
 //! * facts are piggybacked on probes with bounded retransmission, and a periodic full-state
-//!   `Sync` (anti-entropy, also sent to dead members and seeds) repairs whatever gossip lost
+//!   `Sync` (anti-entropy, also sent to dead / left members and seeds) repairs whatever gossip lost
 //!   and heals partitions.
 
 use crate::codec::{MAX_ADDR_BYTES, MAX_UPDATES, MAX_WEIGHT};
@@ -250,6 +250,24 @@ impl Membership {
         v
     }
 
+    /// True when the active nodes (including this one) are a strict majority of all nodes
+    /// this view remembers, not counting those that left gracefully.
+    ///
+    /// Optional guard against ownership ping-pong: a node on the minority side of a
+    /// partition that can still reach the store should not acquire epochs. It is a
+    /// heuristic, not a safety mechanism (fencing is), and it costs availability while
+    /// more than half of the remembered nodes are dead (until `dead_retention_ms` passes).
+    #[must_use]
+    pub fn has_majority(&self) -> bool {
+        let active = self.active_nodes().len();
+        let dead = self
+            .members
+            .values()
+            .filter(|m| m.state == MemberState::Dead)
+            .count();
+        !self.left && active > dead
+    }
+
     /// Placement over the active nodes of this view.
     #[must_use]
     pub fn placement(&self) -> Placement {
@@ -304,7 +322,7 @@ impl Membership {
                 v.push(m.update());
             }
         }
-        self.queue.sort_by(|a, b| b.remaining.cmp(&a.remaining));
+        self.queue.sort_by_key(|q| core::cmp::Reverse(q.remaining));
         for q in self.queue.iter_mut().take(self.cfg.max_piggyback) {
             v.push(q.update.clone());
             q.remaining = q.remaining.saturating_sub(1);
@@ -384,7 +402,12 @@ impl Membership {
         let mut ids = self.active_ids(None);
         self.rng.shuffle(&mut ids);
         let fanout = self.cfg.indirect_probes.max(3);
-        for to in ids.into_iter().take(fanout).filter_map(|i| self.addr_of(i)) {
+        let addrs: Vec<String> = ids
+            .into_iter()
+            .take(fanout)
+            .filter_map(|i| self.addr_of(i))
+            .collect();
+        for to in addrs {
             out.push(Output::Send {
                 to,
                 msg: Message::Sync {
@@ -512,7 +535,7 @@ impl Membership {
         let dead: Vec<u64> = self
             .members
             .values()
-            .filter(|m| m.state == MemberState::Dead)
+            .filter(|m| !m.state.is_active())
             .map(|m| m.node.id)
             .collect();
         let mut targets = Vec::new();
@@ -522,7 +545,11 @@ impl Membership {
         if let Some(id) = dead.get(self.rng.index(dead.len())) {
             targets.push(*id);
         }
-        for to in targets.into_iter().filter_map(|id| self.addr_of(id)) {
+        let addrs: Vec<String> = targets
+            .into_iter()
+            .filter_map(|id| self.addr_of(id))
+            .collect();
+        for to in addrs {
             let updates = self.full_state();
             out.push(Output::Send {
                 to,

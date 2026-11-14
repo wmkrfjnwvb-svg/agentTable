@@ -118,6 +118,18 @@ pub fn claim<S: LeaseStore + ?Sized>(
     now_ms: u64,
     ttl_ms: u64,
 ) -> Result<LeaseToken, ClusterError> {
+    claim_with_expiry(store, shard, me, now_ms, ttl_ms).map(|(token, _)| token)
+}
+
+/// [`claim`], also returning the expiry stored for the lease. An idempotent claim keeps the
+/// existing expiry, which can be earlier than `now_ms + ttl_ms`.
+fn claim_with_expiry<S: LeaseStore + ?Sized>(
+    store: &mut S,
+    shard: u32,
+    me: &NodeId,
+    now_ms: u64,
+    ttl_ms: u64,
+) -> Result<(LeaseToken, u64), ClusterError> {
     let current = store.load(shard)?;
     let (term, cursor_ms) = match &current {
         None => (1, 0),
@@ -125,11 +137,12 @@ pub fn claim<S: LeaseStore + ?Sized>(
             if now_ms < r.expires_at_ms {
                 match &r.holder {
                     Some(h) if h == me => {
-                        return Ok(LeaseToken {
+                        let token = LeaseToken {
                             shard,
                             term: r.term,
                             holder: me.clone(),
-                        });
+                        };
+                        return Ok((token, r.expires_at_ms));
                     }
                     Some(_) => {
                         return Err(ClusterError::LeaseHeld {
@@ -145,20 +158,22 @@ pub fn claim<S: LeaseStore + ?Sized>(
             )
         }
     };
+    let expires_at_ms = now_ms.saturating_add(ttl_ms);
     let new = LeaseRecord {
         term,
         holder: Some(me.clone()),
-        expires_at_ms: now_ms.saturating_add(ttl_ms),
+        expires_at_ms,
         cursor_ms,
     };
     if !store.compare_and_set(shard, current.as_ref(), new)? {
         return Err(ClusterError::Contended);
     }
-    Ok(LeaseToken {
+    let token = LeaseToken {
         shard,
         term,
         holder: me.clone(),
-    })
+    };
+    Ok((token, expires_at_ms))
 }
 
 /// Extends the lease to `now_ms + ttl_ms` (never shortens it). Fails with `Fenced` when the
@@ -201,6 +216,12 @@ pub fn release<S: LeaseStore + ?Sized>(
 /// Commits the firing of everything due up to `upto_ms`. Returns the window to fire, or
 /// `None` when the cursor is already there (idempotent retry). Fails with `Fenced` when the
 /// token is stale and `LeaseExpired` when the lease ran out (renew first).
+///
+/// The cursor moves *before* the caller acts on the window, so on its own this is
+/// at-most-once: a holder that crashes right after this call never fires the window. A
+/// database-backed store must therefore make the work durable in the same transaction as
+/// the cursor move (insert the due jobs into the outbox, then let workers run them); that
+/// turns the window into exactly-once hand-over to a durable queue.
 pub fn advance<S: LeaseStore + ?Sized>(
     store: &mut S,
     token: &LeaseToken,
@@ -324,8 +345,9 @@ impl ShardScheduler {
             match (self.token(shard), desired) {
                 (None, false) => {}
                 (None, true) => {
-                    if let Ok(t) = claim(store, shard, &self.me, now_ms, self.cfg.lease_ttl_ms) {
-                        let expires_at_ms = now_ms.saturating_add(self.cfg.lease_ttl_ms);
+                    let claimed =
+                        claim_with_expiry(store, shard, &self.me, now_ms, self.cfg.lease_ttl_ms);
+                    if let Ok((t, expires_at_ms)) = claimed {
                         self.held.insert(
                             shard,
                             Held {

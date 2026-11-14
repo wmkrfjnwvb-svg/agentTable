@@ -1,5 +1,10 @@
 //! Delivery state machine, ledger and gap tracker: standard, anomalous, edge, invalid, model-based.
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::arithmetic_side_effects, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::panic
+)]
 
 mod common;
 
@@ -21,7 +26,9 @@ fn adv(state: &S, event: &E) -> S {
 }
 
 fn reject(reason: &str) -> E {
-    E::Reject { reason: reason.to_owned() }
+    E::Reject {
+        reason: reason.to_owned(),
+    }
 }
 
 // ---- standard ----
@@ -41,8 +48,18 @@ fn standard_happy_path_to_applied() {
     s = adv(&s, &E::Broadcast);
     assert_eq!(s.name(), "broadcast");
     assert_eq!(s.applied_count(), 0);
-    s = adv(&s, &E::ClientApplied { client: ClientId(1) });
-    s = adv(&s, &E::ClientApplied { client: ClientId(2) });
+    s = adv(
+        &s,
+        &E::ClientApplied {
+            client: ClientId(1),
+        },
+    );
+    s = adv(
+        &s,
+        &E::ClientApplied {
+            client: ClientId(2),
+        },
+    );
     assert_eq!(s.applied_count(), 2);
     assert_eq!(s.committed_seq(), Some(42));
     assert_eq!(s.name(), "applied");
@@ -53,7 +70,12 @@ fn standard_happy_path_to_applied() {
 fn standard_rejection_from_received_and_validated() {
     let received = adv(&adv(&S::Created, &E::Send), &E::Receive);
     let r = adv(&received, &reject("no permission"));
-    assert_eq!(r, S::Rejected { reason: "no permission".into() });
+    assert_eq!(
+        r,
+        S::Rejected {
+            reason: "no permission".into()
+        }
+    );
     assert!(r.is_terminal());
     assert_eq!(r.committed_seq(), None);
     let validated = adv(&received, &E::Validate);
@@ -68,16 +90,30 @@ fn standard_names_and_serde() {
         S::Received,
         S::Validated,
         S::Committed { seq: 1 },
-        S::Rejected { reason: String::new() },
+        S::Rejected {
+            reason: String::new(),
+        },
         S::Broadcast { seq: 1 },
-        S::Applied { seq: 1, by: BTreeSet::new() },
+        S::Applied {
+            seq: 1,
+            by: BTreeSet::new(),
+        },
     ]
     .iter()
     .map(S::name)
     .collect();
     assert_eq!(
         names,
-        ["created", "sent", "received", "validated", "committed", "rejected", "broadcast", "applied"]
+        [
+            "created",
+            "sent",
+            "received",
+            "validated",
+            "committed",
+            "rejected",
+            "broadcast",
+            "applied"
+        ]
     );
     let events = [
         E::Send,
@@ -86,18 +122,34 @@ fn standard_names_and_serde() {
         E::Commit { seq: 1 },
         reject("x"),
         E::Broadcast,
-        E::ClientApplied { client: ClientId(3) },
+        E::ClientApplied {
+            client: ClientId(3),
+        },
     ];
     let event_names: Vec<&str> = events.iter().map(E::name).collect();
     assert_eq!(
         event_names,
-        ["send", "receive", "validate", "commit", "reject", "broadcast", "client_applied"]
+        [
+            "send",
+            "receive",
+            "validate",
+            "commit",
+            "reject",
+            "broadcast",
+            "client_applied"
+        ]
     );
     let json = serde_json::to_string(&S::Committed { seq: 9 }).unwrap();
     assert_eq!(json, r#"{"state":"committed","seq":9}"#);
-    assert_eq!(serde_json::from_str::<S>(&json).unwrap(), S::Committed { seq: 9 });
+    assert_eq!(
+        serde_json::from_str::<S>(&json).unwrap(),
+        S::Committed { seq: 9 }
+    );
     let ev = serde_json::to_string(&E::Commit { seq: 9 }).unwrap();
-    assert_eq!(serde_json::from_str::<E>(&ev).unwrap(), E::Commit { seq: 9 });
+    assert_eq!(
+        serde_json::from_str::<E>(&ev).unwrap(),
+        E::Commit { seq: 9 }
+    );
 }
 
 #[test]
@@ -132,7 +184,10 @@ fn standard_ledger_outbox_flow() {
 fn standard_server_side_receive() {
     let mut ledger = DeliveryLedger::new();
     let op = ClientOpId(7);
-    assert_eq!(ledger.receive(op).unwrap(), StepOutcome::Advanced(S::Received));
+    assert_eq!(
+        ledger.receive(op).unwrap(),
+        StepOutcome::Advanced(S::Received)
+    );
     assert_eq!(ledger.receive(op).unwrap(), StepOutcome::Duplicate);
     ledger.apply(op, &E::Validate).unwrap();
     assert_eq!(ledger.receive(op).unwrap(), StepOutcome::Duplicate);
@@ -156,14 +211,23 @@ fn anomalous_redelivery_is_idempotent() {
         E::Validate,
         E::Commit { seq: 5 },
         E::Broadcast,
-        E::ClientApplied { client: ClientId(1) },
+        E::ClientApplied {
+            client: ClientId(1),
+        },
     ];
     for (i, e) in script.iter().enumerate() {
-        assert!(matches!(ledger.apply(op, e).unwrap(), StepOutcome::Advanced(_)));
+        assert!(matches!(
+            ledger.apply(op, e).unwrap(),
+            StepOutcome::Advanced(_)
+        ));
         // Everything delivered so far may be delivered again without effect.
         let before = ledger.clone();
         for old in &script[..=i] {
-            assert_eq!(ledger.apply(op, old).unwrap(), StepOutcome::Duplicate, "{old:?}");
+            assert_eq!(
+                ledger.apply(op, old).unwrap(),
+                StepOutcome::Duplicate,
+                "{old:?}"
+            );
         }
         assert_eq!(ledger, before);
     }
@@ -171,7 +235,9 @@ fn anomalous_redelivery_is_idempotent() {
 
 #[test]
 fn anomalous_retry_after_rejection_keeps_first_reason() {
-    let s = S::Rejected { reason: "first".into() };
+    let s = S::Rejected {
+        reason: "first".into(),
+    };
     assert_eq!(step(&s, &E::Send).unwrap(), StepOutcome::Duplicate);
     assert_eq!(step(&s, &E::Receive).unwrap(), StepOutcome::Duplicate);
     assert_eq!(step(&s, &reject("second")).unwrap(), StepOutcome::Duplicate);
@@ -188,15 +254,33 @@ fn anomalous_conflicting_commit_and_reused_seq() {
     ledger.apply(a, &E::Commit { seq: 3 }).unwrap();
     assert_eq!(
         ledger.apply(a, &E::Commit { seq: 4 }),
-        Err(AuditError::CommitConflict { existing: 3, attempted: 4 })
+        Err(AuditError::CommitConflict {
+            existing: 3,
+            attempted: 4
+        })
     );
     let before = ledger.clone();
-    assert_eq!(ledger.apply(b, &E::Commit { seq: 3 }), Err(AuditError::SequenceReused { seq: 3 }));
+    assert_eq!(
+        ledger.apply(b, &E::Commit { seq: 3 }),
+        Err(AuditError::SequenceReused { seq: 3 })
+    );
     assert_eq!(ledger, before, "failed call leaves the ledger untouched");
     ledger.apply(b, &E::Commit { seq: 4 }).unwrap();
-    for s in [S::Broadcast { seq: 3 }, S::Applied { seq: 3, by: BTreeSet::new() }] {
-        assert!(matches!(step(&s, &E::Commit { seq: 9 }), Err(AuditError::CommitConflict { .. })));
-        assert_eq!(step(&s, &E::Commit { seq: 3 }).unwrap(), StepOutcome::Duplicate);
+    for s in [
+        S::Broadcast { seq: 3 },
+        S::Applied {
+            seq: 3,
+            by: BTreeSet::new(),
+        },
+    ] {
+        assert!(matches!(
+            step(&s, &E::Commit { seq: 9 }),
+            Err(AuditError::CommitConflict { .. })
+        ));
+        assert_eq!(
+            step(&s, &E::Commit { seq: 3 }).unwrap(),
+            StepOutcome::Duplicate
+        );
     }
 }
 
@@ -219,27 +303,75 @@ fn invalid_transitions_are_errors() {
         (S::Sent, reject("x")),
         (committed.clone(), reject("x")),
         (S::Broadcast { seq: 1 }, reject("x")),
-        (S::Applied { seq: 1, by: BTreeSet::new() }, reject("x")),
+        (
+            S::Applied {
+                seq: 1,
+                by: BTreeSet::new(),
+            },
+            reject("x"),
+        ),
         (S::Created, E::Broadcast),
         (S::Sent, E::Broadcast),
         (S::Received, E::Broadcast),
         (S::Validated, E::Broadcast),
         (rejected.clone(), E::Broadcast),
-        (S::Created, E::ClientApplied { client: ClientId(1) }),
-        (S::Sent, E::ClientApplied { client: ClientId(1) }),
-        (S::Received, E::ClientApplied { client: ClientId(1) }),
-        (S::Validated, E::ClientApplied { client: ClientId(1) }),
-        (committed, E::ClientApplied { client: ClientId(1) }),
-        (rejected, E::ClientApplied { client: ClientId(1) }),
+        (
+            S::Created,
+            E::ClientApplied {
+                client: ClientId(1),
+            },
+        ),
+        (
+            S::Sent,
+            E::ClientApplied {
+                client: ClientId(1),
+            },
+        ),
+        (
+            S::Received,
+            E::ClientApplied {
+                client: ClientId(1),
+            },
+        ),
+        (
+            S::Validated,
+            E::ClientApplied {
+                client: ClientId(1),
+            },
+        ),
+        (
+            committed,
+            E::ClientApplied {
+                client: ClientId(1),
+            },
+        ),
+        (
+            rejected,
+            E::ClientApplied {
+                client: ClientId(1),
+            },
+        ),
     ];
     for (state, event) in cases {
         let err = step(&state, &event).unwrap_err();
-        assert_eq!(err, AuditError::IllegalTransition { from: state.name(), event: event.name() });
+        assert_eq!(
+            err,
+            AuditError::IllegalTransition {
+                from: state.name(),
+                event: event.name()
+            }
+        );
         assert!(err.to_string().contains(state.name()));
     }
-    assert_eq!(step(&S::Validated, &E::Commit { seq: 0 }), Err(AuditError::ZeroSequence));
+    assert_eq!(
+        step(&S::Validated, &E::Commit { seq: 0 }),
+        Err(AuditError::ZeroSequence)
+    );
     let mut ledger = DeliveryLedger::new();
-    assert_eq!(ledger.apply(ClientOpId(9), &E::Send), Err(AuditError::UnknownOperation));
+    assert_eq!(
+        ledger.apply(ClientOpId(9), &E::Send),
+        Err(AuditError::UnknownOperation)
+    );
 }
 
 // ---- model-based (seeded) ----
@@ -326,7 +458,11 @@ impl Model {
                 self.phase == 4 && *seq == self.seq && self.broadcast && self.acks.is_empty()
             }
             S::Applied { seq, by } => {
-                self.phase == 4 && *seq == self.seq && self.broadcast && *by == self.acks && !by.is_empty()
+                self.phase == 4
+                    && *seq == self.seq
+                    && self.broadcast
+                    && *by == self.acks
+                    && !by.is_empty()
             }
         }
     }
@@ -338,9 +474,13 @@ fn random_event(rng: &mut Rng) -> E {
         1 => E::Receive,
         2 => E::Validate,
         3 | 4 => E::Commit { seq: rng.below(4) },
-        5 => E::Reject { reason: format!("r{}", rng.below(3)) },
+        5 => E::Reject {
+            reason: format!("r{}", rng.below(3)),
+        },
         6 => E::Broadcast,
-        _ => E::ClientApplied { client: ClientId(u128::from(rng.below(3))) },
+        _ => E::ClientApplied {
+            client: ClientId(u128::from(rng.below(3))),
+        },
     }
 }
 
@@ -349,7 +489,12 @@ fn run_model(seed: u64, steps: usize) {
     let mut ledger = DeliveryLedger::new();
     let op = ClientOpId(u128::from(seed));
     ledger.create(op);
-    let mut model = Model { phase: 0, seq: 0, broadcast: false, acks: BTreeSet::new() };
+    let mut model = Model {
+        phase: 0,
+        seq: 0,
+        broadcast: false,
+        acks: BTreeSet::new(),
+    };
     for i in 0..steps {
         // Bias towards progress so that deep states are reached, with plenty of noise.
         let event = if rng.below(3) == 0 {
@@ -357,7 +502,9 @@ fn run_model(seed: u64, steps: usize) {
                 0 => E::Send,
                 1 => E::Receive,
                 2 => E::Validate,
-                3 => E::Commit { seq: 1 + rng.below(3) },
+                3 => E::Commit {
+                    seq: 1 + rng.below(3),
+                },
                 _ => random_event(&mut rng),
             }
         } else {
@@ -379,9 +526,16 @@ fn run_model(seed: u64, steps: usize) {
         }
         assert!(model.matches(after), "{ctx} model={model:?}");
         // Safety invariants.
-        assert!(!was_terminal || after.is_terminal(), "left terminal state; {ctx}");
+        assert!(
+            !was_terminal || after.is_terminal(),
+            "left terminal state; {ctx}"
+        );
         if let Some(seq) = committed_before {
-            assert_eq!(after.committed_seq(), Some(seq), "committed seq changed; {ctx}");
+            assert_eq!(
+                after.committed_seq(),
+                Some(seq),
+                "committed seq changed; {ctx}"
+            );
         }
         if matches!(before, S::Rejected { .. }) {
             assert_eq!(&before, after, "rejected is absorbing; {ctx}");
@@ -415,25 +569,64 @@ fn tracker_standard_in_order_gap_fill_and_duplicates() {
     let mut t = SeqTracker::new();
     assert_eq!(t.contiguous_through(), 0);
     assert_eq!(t.highest_seen(), 0);
-    assert_eq!(t.observe(1).unwrap(), SeqObservation::InOrder { contiguous_through: 1 });
-    assert_eq!(t.observe(2).unwrap(), SeqObservation::InOrder { contiguous_through: 2 });
+    assert_eq!(
+        t.observe(1).unwrap(),
+        SeqObservation::InOrder {
+            contiguous_through: 1
+        }
+    );
+    assert_eq!(
+        t.observe(2).unwrap(),
+        SeqObservation::InOrder {
+            contiguous_through: 2
+        }
+    );
     assert_eq!(t.observe(2).unwrap(), SeqObservation::Duplicate);
-    assert_eq!(t.observe(5).unwrap(), SeqObservation::Gap { missing: vec![range(3, 4)] });
+    assert_eq!(
+        t.observe(5).unwrap(),
+        SeqObservation::Gap {
+            missing: vec![range(3, 4)]
+        }
+    );
     assert_eq!(t.observe(5).unwrap(), SeqObservation::Duplicate);
     assert_eq!(
         t.observe(9).unwrap(),
-        SeqObservation::Gap { missing: vec![range(3, 4), range(6, 8)] }
+        SeqObservation::Gap {
+            missing: vec![range(3, 4), range(6, 8)]
+        }
     );
     assert_eq!(t.highest_seen(), 9);
     assert!(t.has_seen(5) && !t.has_seen(6) && !t.has_seen(10));
     assert_eq!(
         t.observe(7).unwrap(),
-        SeqObservation::Gap { missing: vec![range(3, 4), range(6, 6), range(8, 8)] }
+        SeqObservation::Gap {
+            missing: vec![range(3, 4), range(6, 6), range(8, 8)]
+        }
     );
-    assert_eq!(t.observe(6).unwrap(), SeqObservation::Gap { missing: vec![range(3, 4), range(8, 8)] });
-    assert_eq!(t.observe(8).unwrap(), SeqObservation::Gap { missing: vec![range(3, 4)] });
-    assert_eq!(t.observe(3).unwrap(), SeqObservation::InOrder { contiguous_through: 3 });
-    assert_eq!(t.observe(4).unwrap(), SeqObservation::InOrder { contiguous_through: 9 });
+    assert_eq!(
+        t.observe(6).unwrap(),
+        SeqObservation::Gap {
+            missing: vec![range(3, 4), range(8, 8)]
+        }
+    );
+    assert_eq!(
+        t.observe(8).unwrap(),
+        SeqObservation::Gap {
+            missing: vec![range(3, 4)]
+        }
+    );
+    assert_eq!(
+        t.observe(3).unwrap(),
+        SeqObservation::InOrder {
+            contiguous_through: 3
+        }
+    );
+    assert_eq!(
+        t.observe(4).unwrap(),
+        SeqObservation::InOrder {
+            contiguous_through: 9
+        }
+    );
     assert!(t.missing().is_empty());
 }
 
@@ -459,11 +652,15 @@ fn tracker_edge_resync_and_bounds() {
     let mut top = SeqTracker::starting_after(u64::MAX - 2);
     assert_eq!(
         top.observe(u64::MAX).unwrap(),
-        SeqObservation::Gap { missing: vec![range(u64::MAX - 1, u64::MAX - 1)] }
+        SeqObservation::Gap {
+            missing: vec![range(u64::MAX - 1, u64::MAX - 1)]
+        }
     );
     assert_eq!(
         top.observe(u64::MAX - 1).unwrap(),
-        SeqObservation::InOrder { contiguous_through: u64::MAX }
+        SeqObservation::InOrder {
+            contiguous_through: u64::MAX
+        }
     );
     assert_eq!(top.observe(u64::MAX).unwrap(), SeqObservation::Duplicate);
     let mut ahead = SeqTracker::new();
