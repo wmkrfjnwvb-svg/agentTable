@@ -521,6 +521,12 @@ fn tamper_rewritten_suffix_is_caught_by_checkpoints() {
     let v = verify_store(&log, &store, &key).unwrap();
     // The forgery lies in (10, 20].
     assert_eq!(finding(&v), (20, TamperKind::CheckpointMismatch, 10));
+
+    // The verdict does not depend on the order the store returns its checkpoints in: an
+    // attacker who shuffles them cannot blur where the forgery is.
+    store.checkpoints_mut().reverse();
+    let v = verify_store(&log, &store, &key).unwrap();
+    assert_eq!(finding(&v), (20, TamperKind::CheckpointMismatch, 10));
 }
 
 #[test]
@@ -1103,5 +1109,33 @@ fn privacy_edge_and_invalid() {
     assert!(
         dbg.contains("email") && dbg.contains("Full") && !dbg.contains("116"),
         "{dbg}"
+    );
+}
+
+#[test]
+fn edge_checkpoint_at_the_anchor_and_unknown_keys() {
+    let (log, store) = chain(6);
+    let key = signer();
+    let es = store.entries();
+    // A checkpoint exactly at the anchor is compared with the anchor itself.
+    let anchor = es[2].head();
+    let good = Checkpoint::sign(log.chain_id(), anchor, 0, &key).unwrap();
+    let verdict = verify_against_checkpoint(&log, anchor, &es[3..], &good, &key).unwrap();
+    assert!(verdict.is_intact());
+    assert_eq!(verdict.finding(), None);
+
+    let wrong_head = ChainHead {
+        seq: anchor.seq,
+        hash: es[0].hash,
+    };
+    let bad = Checkpoint::sign(log.chain_id(), wrong_head, 0, &key).unwrap();
+    let verdict = verify_against_checkpoint(&log, anchor, &es[3..], &bad, &key).unwrap();
+    assert_eq!(finding(&verdict), (3, TamperKind::CheckpointMismatch, 3));
+
+    // A verifier that does not know the signing key says so instead of guessing a verdict.
+    let stranger = HmacSha256Signer::new("other-key", &[7u8; 32]).unwrap();
+    assert_eq!(
+        verify_against_checkpoint(&log, anchor, &es[3..], &good, &stranger),
+        Err(AuditError::UnknownKey)
     );
 }

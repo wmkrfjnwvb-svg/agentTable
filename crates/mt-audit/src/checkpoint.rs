@@ -135,10 +135,13 @@ impl sha2::digest::Update for Buffer {
 }
 
 /// HMAC-SHA256 signer and verifier with a caller-provided secret key.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// The key is held as a keyed HMAC state, not as bytes, and the type cannot be compared, so no
+/// code path can leak the key through a non-constant-time comparison.
+#[derive(Clone)]
 pub struct HmacSha256Signer {
     key_id: String,
-    key: Vec<u8>,
+    keyed: Hmac<Sha256>,
 }
 
 impl HmacSha256Signer {
@@ -154,17 +157,16 @@ impl HmacSha256Signer {
         if key.len() < Self::MIN_KEY_BYTES {
             return Err(AuditError::Signing("key too short"));
         }
-        Ok(Self {
-            key_id,
-            key: key.to_vec(),
-        })
+        // HMAC accepts keys of any length, so this cannot fail for a long enough key.
+        let keyed =
+            Hmac::<Sha256>::new_from_slice(key).map_err(|_| AuditError::Signing("unusable key"))?;
+        Ok(Self { key_id, keyed })
     }
 
-    fn mac(&self, message: &[u8]) -> Result<Hmac<Sha256>, AuditError> {
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key)
-            .map_err(|_| AuditError::Signing("unusable key"))?;
+    fn mac(&self, message: &[u8]) -> Hmac<Sha256> {
+        let mut mac = self.keyed.clone();
         mac.update(message);
-        Ok(mac)
+        mac
     }
 }
 
@@ -187,7 +189,7 @@ impl CheckpointSigner for HmacSha256Signer {
     }
 
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, AuditError> {
-        Ok(self.mac(message)?.finalize().into_bytes().to_vec())
+        Ok(self.mac(message).finalize().into_bytes().to_vec())
     }
 }
 
@@ -203,7 +205,7 @@ impl CheckpointVerifier for HmacSha256Signer {
             return Err(AuditError::UnknownKey);
         }
         // `verify_slice` compares in constant time.
-        self.mac(message)?
+        self.mac(message)
             .verify_slice(signature)
             .map_err(|_| AuditError::BadSignature)
     }

@@ -231,7 +231,10 @@ pub fn verify_store<S: AuditStore + ?Sized>(
     store: &S,
     verifier: &dyn CheckpointVerifier,
 ) -> Result<ChainVerdict, AuditError> {
-    let checkpoints = store.checkpoints()?;
+    // Sorted here so that the verdict does not depend on the order a (possibly tampered) store
+    // returns them in: a checkpoint moved out of order must not be skipped.
+    let mut checkpoints = store.checkpoints()?;
+    checkpoints.sort_by_key(|c| c.seq);
     let mut fetch = |offset: usize, limit: usize| store.scan(offset, limit);
     run(
         log.chain_id(),
