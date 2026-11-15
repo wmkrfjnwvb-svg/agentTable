@@ -1316,6 +1316,31 @@ pub struct FieldGroup {
     /// stay readable through the API unless a capability says otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visible_when: Option<Condition>,
+    /// The capability needed to see the group's fields (anyone who can read the record, if
+    /// absent). Unlike `visible_when` this is protection: without it the values are not
+    /// sent to the viewer at all, through any path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_capability: Option<String>,
+    /// The capability needed to change the group's fields (anyone who can update the
+    /// record, if absent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit_capability: Option<String>,
+}
+
+/// Maximum number of characters in a capability key.
+pub const MAX_CAPABILITY_KEY_CHARS: usize = 128;
+
+/// Whether `key` is a well-formed capability key: lower-case letters, digits, `.`, `_`, `-`
+/// and `:`, starting with a letter, at most [`MAX_CAPABILITY_KEY_CHARS`] characters
+/// (`salary.view`, `transition:approve_po`).
+#[must_use]
+pub fn is_capability_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-' | ':')
+        })
+        && key.len() <= MAX_CAPABILITY_KEY_CHARS
 }
 
 impl FieldGroup {
@@ -1378,6 +1403,17 @@ impl FieldGroup {
                 return Err(invalid(format!(
                     "field {field} is listed twice in group `{}`",
                     clip(&self.name)
+                )));
+            }
+        }
+        for key in [&self.view_capability, &self.edit_capability]
+            .into_iter()
+            .flatten()
+        {
+            if !is_capability_key(key) {
+                return Err(invalid(format!(
+                    "`{}` is not a capability key: use lower-case letters, digits, `.`, `_`, `-` and `:`, starting with a letter",
+                    clip(key)
                 )));
             }
         }
@@ -1809,10 +1845,30 @@ mod tests {
             fields: vec![fid(1), fid(2)],
             description: None,
             visible_when: None,
+            view_capability: None,
+            edit_capability: None,
         };
         group.check().unwrap();
         let json = serde_json::to_string(&group).unwrap();
         assert_eq!(serde_json::from_str::<FieldGroup>(&json).unwrap(), group);
+        // Capabilities that protect the group's fields.
+        group.view_capability = Some("salary.view".into());
+        group.edit_capability = Some("salary.edit".into());
+        group.check().unwrap();
+        let json = serde_json::to_string(&group).unwrap();
+        assert_eq!(serde_json::from_str::<FieldGroup>(&json).unwrap(), group);
+        for key in ["", "Salary", "9x", "salary view", "é", &"a".repeat(129)] {
+            group.view_capability = Some(key.to_owned());
+            assert!(
+                reason(group.check()).contains("is not a capability key"),
+                "{key}"
+            );
+            assert!(!is_capability_key(key));
+        }
+        group.view_capability = Some("transition:approve_po-2".into());
+        group.check().unwrap();
+        assert!(is_capability_key(&"a".repeat(128)));
+        group.view_capability = None;
         group.fields.push(fid(1));
         assert!(reason(group.check()).contains("listed twice"));
         group.fields.clear();
@@ -2085,6 +2141,8 @@ mod tests {
             fields: vec![fid(1), fid(3)],
             description: None,
             visible_when: None,
+            view_capability: None,
+            edit_capability: None,
         };
         let ctx = UtcContext::on(Date::EPOCH);
         let big = Value::Number(crate::value::testkit::dec("20000"));

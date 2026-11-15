@@ -292,6 +292,16 @@ define_ids! {
     TemplateId, Template => "tpl";
     /// A change set.
     ChangeSetId, ChangeSet => "chg";
+    /// A grant of a capability to a principal.
+    GrantId, Grant => "grt";
+    /// A named set of capabilities.
+    CapabilitySetId, CapabilitySet => "cps";
+    /// A separation-of-duties rule.
+    SodRuleId, SodRule => "sod";
+    /// A share link.
+    ShareLinkId, ShareLink => "shl";
+    /// An access review.
+    AccessReviewId, AccessReview => "arv";
 }
 
 #[cfg(test)]
@@ -367,7 +377,7 @@ mod tests {
             assert!(kind.prefix().bytes().all(|b| b.is_ascii_lowercase()));
             assert_eq!(IdKind::from_prefix(kind.prefix()), Some(*kind));
         }
-        assert_eq!(IdKind::ALL.len(), 33);
+        assert_eq!(IdKind::ALL.len(), 38);
         assert_eq!(RecordId::KIND, IdKind::Record);
         assert_eq!(RecordId::PREFIX, "rec");
         assert_eq!(
