@@ -1,0 +1,19 @@
+[package]
+name = "mt-perm"
+description = "Access control: capabilities, grants with scopes and conditions, capability sets, separation of duties, field permissions, share links, access reviews, and explanations of every decision (pure, sans-IO)."
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+
+[dependencies]
+mt-core = { path = "../mt-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
