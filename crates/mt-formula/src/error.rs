@@ -60,6 +60,14 @@ pub enum FormulaError {
     /// A size limit was exceeded.
     #[error("the formula is too large: {0}")]
     Limit(&'static str),
+    /// The stored formula of a computed field cannot be read or written.
+    #[error("the formula of `{field}` cannot be read: {reason}")]
+    Stored {
+        /// The field's name.
+        field: String,
+        /// What is wrong with the stored form.
+        reason: String,
+    },
 }
 
 impl FormulaError {

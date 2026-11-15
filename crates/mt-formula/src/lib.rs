@@ -7,6 +7,7 @@
 //! * [`eval`] — the bounded evaluator.
 //! * [`deps`] — what a formula reads, cycle detection, evaluation order and what to
 //!   recompute after a change.
+//! * [`field`] — formulas on field definitions: the computed facet of `mt_core::field::FieldDef`.
 //! * [`schema`] — what a formula needs to know about the tables it refers to.
 //! * [`error`] — problems with a formula's text, and the error values a formula can
 //!   evaluate to.
@@ -20,6 +21,7 @@ pub mod ast;
 pub mod deps;
 pub mod error;
 pub mod eval;
+pub mod field;
 mod functions;
 pub mod parser;
 pub mod schema;

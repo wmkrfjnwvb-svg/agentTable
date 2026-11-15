@@ -19,6 +19,7 @@ from the machine.
 | `value` | `Val`, the values during evaluation, and the rules for combining kinds |
 | `eval` | `evaluate`, `evaluate_with` (sees results of computed fields evaluated earlier), `evaluate_to` (to the cell value of a field type). `Record` and `Env` are what the caller supplies |
 | `deps` | `dependencies`, `analyse` (design-time cost warnings), `Graph`: cycle detection, evaluation order, `affected` (what to recompute after a change, also across links), `compute` (one record, in order) |
+| `field` | Formulas on field definitions: `attach`, `formula_of`, `check_field` (shape of lookup / roll-up / formula, result against the field's type), `computed_fields` (a table's definitions → the graph) |
 | `schema` | `Schema`: field ids, names and types of the formula's table and of linked tables |
 | `error` | `FormulaError` (the text is not acceptable) and `ErrorValue` (the result for one record: `#DIV/0!`, `#VALUE!`, `#REF!`, `#NUM!`, `#CURRENCY!`, `#N/A`, `#LIMIT!`, `#CYCLE!`) |
 
@@ -104,8 +105,8 @@ A lookup field is `{Link}.{Field}`; a roll-up is an aggregate over it (`SUM`, `C
 
 ## Not in this crate
 
-* Storing formulas in field definitions (the computed facet of `mt_core::field::FieldDef`) and
-  scheduling recomputation: storage and operations layers (wave 3).
+* Persisting definitions and scheduling recomputation: storage and operations layers (wave 3).
+  The formula itself lives in the computed facet of `mt_core::field::FieldDef` (module `field`).
 * Localised function names and number formats: the formula text is the same in every language;
   `TEXT` uses English month and weekday names.
 * Regular expressions and user-defined functions.
@@ -119,9 +120,10 @@ A lookup field is `{Link}.{Field}`; a roll-up is an aggregate over it (`SUM`, `C
 | `tests/functions.rs` | Every function: standard, edge and invalid arguments; `TEXT` patterns; working days; time zones; lists of linked values; conditions written as text; nested list conditions; reference data and parameters | 22 |
 | `tests/types.rs` | The type of every kind of expression, unknown kinds, everything the checker refuses and its message, trees that did not come from the parser, results against field types, error values | 13 |
 | `tests/graph.rs` | Dependencies, warnings, order, circles (also across links), invalid definitions, what a change affects, two links to one table, computing a record | 9 |
+| `tests/field.rs` | Attaching a formula to a definition, storage, the shape of each kind, results against field types, unreadable stored formulas, the graph from a table's definitions | 5 |
 | `tests/properties.rs` | Printing keeps the meaning; evaluation is total and repeatable; the checker tells the truth (random trees, and 1 500 formulas well typed by construction); storage round trip; the parser survives any text; order and recompute against a model; thread-safety | 9 |
 
-By category: standard 41, edge 10, invalid 19, anomalous 3, properties 8, concurrency 1;
+By category: standard 44, edge 10, invalid 20, anomalous 4, properties 8, concurrency 1;
 cross-platform is the WebAssembly build. Line coverage 99.8 % (the one uncovered line of the library is a
 defensive arm that exhaustive matching requires and no input reaches).
 
