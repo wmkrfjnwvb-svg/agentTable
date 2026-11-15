@@ -280,16 +280,13 @@ pub(crate) fn call(function: DateFn, values: &[Val], env: &dyn Env) -> Result<Va
                     .ok_or(ErrorValue::Num),
                 None => Ok(Decimal::ZERO),
             };
-            let total = part(0, 3_600_000)?
-                .checked_add(part(1, 60_000)?)
-                .and_then(|sum| {
-                    part(2, 1_000)
-                        .ok()
-                        .and_then(|seconds| sum.checked_add(seconds))
-                })
+            // An argument's own error comes before an overflow of the total.
+            let (hours, minutes, seconds) =
+                (part(0, 3_600_000)?, part(1, 60_000)?, part(2, 1_000)?);
+            let total = hours
+                .checked_add(minutes)
+                .and_then(|sum| sum.checked_add(seconds))
                 .ok_or(ErrorValue::Num)?;
-            // A seconds argument that is itself an error must not be swallowed.
-            part(2, 1_000)?;
             whole(Rounding::HalfEven.round(total, 0))
                 .map(|millis| Val::Duration(DurationMs::from_millis(millis)))
                 .ok_or(ErrorValue::Num)
