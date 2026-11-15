@@ -622,9 +622,21 @@ fn std_cell_values_from_other_kinds_of_fields() {
         .cells
         .insert(fid(TAGS), Value::MultiReference(vec![]));
     record.cells.insert(fid(OWNER), Value::Principal(vec![]));
+    record.cells.insert(
+        fid(FILES),
+        Value::Attachment(vec![
+            mt_core::id::AttachmentId::from_u128(1),
+            mt_core::id::AttachmentId::from_u128(2),
+        ]),
+    );
+    record
+        .cells
+        .insert(fid(NOTES), Value::Json(serde_json::Value::Null));
     check_in(
         &[
             ("{Extra}", r#""{"a":1}""#),
+            ("COUNTA({Files})", "2"),
+            ("ISBLANK({Notes})", "TRUE"),
             ("{Tags}", "[]"),
             ("ISBLANK({Tags})", "TRUE"),
             ("COUNTA({Owner})", "0"),
@@ -1025,6 +1037,9 @@ fn edge_evaluation_is_bounded() {
         run(r#"CONCAT(REPT("x", 60000), REPT("y", 40001))"#),
         "#LIMIT!"
     );
+    // Joining stops early instead of building a huge text first.
+    let huge = format!("CONCAT({})", [r#"REPT("x", 100000)"#; 5].join(", "));
+    assert_eq!(run(&huge), "#LIMIT!");
     assert_eq!(
         run(r#"LEN(TEXTJOIN(REPT("-", 49998), FALSE, "a", "b", "c"))"#),
         "99999"

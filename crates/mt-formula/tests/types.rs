@@ -421,6 +421,14 @@ fn invalid_operands() {
         ("2 / {Effort}", "cannot combine a number and a duration"),
         ("{Status} + 1", "cannot combine a reference and a number"),
         (
+            r#"PARAM("x") + {Status}"#,
+            "cannot combine a value and a reference",
+        ),
+        (
+            r#"{Done} - PARAM("x") * {Tags}"#,
+            "cannot calculate with a list",
+        ),
+        (
             "{Status} * {Status}",
             "cannot combine a reference and a reference",
         ),

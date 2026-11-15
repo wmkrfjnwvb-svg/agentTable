@@ -166,12 +166,16 @@ fn unify_all(types: impl IntoIterator<Item = Type>) -> Type {
     types.into_iter().reduce(unify).unwrap_or(Type::Any)
 }
 
-/// The result type of an arithmetic operator. Where an operand of unknown kind leaves more
-/// than one possibility (a number plus an unknown value is a number or a date), the result
-/// is of unknown kind too.
-fn arithmetic(op: BinaryOp, a: &Type, b: &Type) -> Result<Type, FormulaError> {
+/// The result type of an operator. Where an operand of unknown kind leaves more than one
+/// possibility (a number plus an unknown value is a number or a date), the result is of
+/// unknown kind too. `with_empty_text` says that one side is the literal `""`.
+fn binary(op: BinaryOp, a: &Type, b: &Type, with_empty_text: bool) -> Result<Type, FormulaError> {
     use Type::{Any, Date, DateTime, Duration, Money, Number};
-    if a.is_list() || b.is_list() {
+    let arithmetic = matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide
+    );
+    if arithmetic && (a.is_list() || b.is_list()) {
         return Err(mismatch(format!(
             "`{}` cannot calculate with a list; use SUM, FIRST or another list function",
             op.symbol()
@@ -231,14 +235,14 @@ fn arithmetic(op: BinaryOp, a: &Type, b: &Type) -> Result<Type, FormulaError> {
             (Any, y) if y.numeric() => Some(Any),
             _ => None,
         },
-        // Not arithmetic; handled by the caller.
-        BinaryOp::Concat
-        | BinaryOp::Equal
+        // Anything can be joined as text.
+        BinaryOp::Concat => Some(Type::Text),
+        BinaryOp::Equal
         | BinaryOp::NotEqual
         | BinaryOp::Less
         | BinaryOp::LessOrEqual
         | BinaryOp::Greater
-        | BinaryOp::GreaterOrEqual => None,
+        | BinaryOp::GreaterOrEqual => return comparison(op, a, b, with_empty_text),
     };
     result.ok_or_else(|| {
         mismatch(format!(
@@ -500,21 +504,8 @@ impl Checker<'_> {
             Expr::Binary { op, left, right } => {
                 let a = self.infer(left, in_condition)?;
                 let b = self.infer(right, in_condition)?;
-                match op {
-                    BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide => {
-                        arithmetic(*op, &a, &b)
-                    }
-                    BinaryOp::Concat => Ok(Type::Text),
-                    BinaryOp::Equal
-                    | BinaryOp::NotEqual
-                    | BinaryOp::Less
-                    | BinaryOp::LessOrEqual
-                    | BinaryOp::Greater
-                    | BinaryOp::GreaterOrEqual => {
-                        let with_empty_text = is_empty_text(left) || is_empty_text(right);
-                        comparison(*op, &a, &b, with_empty_text)
-                    }
-                }
+                let with_empty_text = is_empty_text(left) || is_empty_text(right);
+                binary(*op, &a, &b, with_empty_text)
             }
             Expr::Call { function, args } => self.call(*function, args, in_condition),
         }

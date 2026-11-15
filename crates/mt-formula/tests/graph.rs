@@ -317,6 +317,12 @@ fn std_warnings_for_the_person_writing_a_formula() {
             Warning::NestedListCondition
         ]
     );
+    // A hand-built call without its condition is analysed without complaint.
+    let incomplete = Expr::Call {
+        function: mt_formula::Function::List(mt_formula::ListFn::CountIf),
+        args: vec![formula(ORDERS, "{Lines}.{Qty}")],
+    };
+    assert_eq!(analyse(&incomplete).warnings, []);
     // The whole analysis, as the formula editor receives it.
     let analysis = analyse(&formula(ORDERS, "IF({Done}, 0, {Due} - TODAY())"));
     assert_eq!(analysis.nodes, 6);

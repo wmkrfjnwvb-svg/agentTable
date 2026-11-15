@@ -279,19 +279,18 @@ impl Graph {
 
     /// The computed fields a computed field reads.
     fn inputs(&self, key: Key) -> Vec<Key> {
-        let Some(node) = self.nodes.get(&key) else {
-            return Vec::new();
-        };
-        let local = node.deps.fields.iter().map(|field| (key.0, *field));
-        let remote = node.deps.through.iter().filter_map(|(link, field)| {
-            self.targets
-                .get(&(key.0, *link))
-                .map(|table| (*table, *field))
-        });
-        local
-            .chain(remote)
-            .filter(|input| self.nodes.contains_key(input))
-            .collect()
+        self.nodes.get(&key).map_or_else(Vec::new, |node| {
+            let local = node.deps.fields.iter().map(|field| (key.0, *field));
+            let remote = node.deps.through.iter().filter_map(|(link, field)| {
+                self.targets
+                    .get(&(key.0, *link))
+                    .map(|table| (*table, *field))
+            });
+            local
+                .chain(remote)
+                .filter(|input| self.nodes.contains_key(input))
+                .collect()
+        })
     }
 
     /// Orders the fields so that each comes after the computed fields it reads.

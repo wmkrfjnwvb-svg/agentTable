@@ -88,13 +88,16 @@ impl Val {
     /// The evaluation value of a cell value.
     #[must_use]
     pub fn from_value(value: &Value) -> Val {
-        if value.is_empty() && value.item_count().is_none() {
-            return Val::Blank;
-        }
         let ids = |texts: Vec<String>| Val::List(texts.into_iter().map(Val::Text).collect());
         match value {
             Value::Null => Val::Blank,
-            Value::Text(text) | Value::LongText(text) => Val::Text(text.clone()),
+            Value::Text(text) | Value::LongText(text) => {
+                if text.trim().is_empty() {
+                    Val::Blank
+                } else {
+                    Val::Text(text.clone())
+                }
+            }
             Value::Number(n) | Value::Percent(n) => Val::Number(*n),
             Value::Money(m) => Val::Money(m.amount(), m.currency()),
             Value::Bool(b) => Val::Bool(*b),
@@ -106,7 +109,13 @@ impl Val {
             Value::Link(items) => ids(items.iter().map(ToString::to_string).collect()),
             Value::Principal(items) => ids(items.iter().map(ToString::to_string).collect()),
             Value::Attachment(items) => ids(items.iter().map(ToString::to_string).collect()),
-            Value::Json(json) => Val::Text(json.to_string()),
+            Value::Json(json) => {
+                if json.is_null() {
+                    Val::Blank
+                } else {
+                    Val::Text(json.to_string())
+                }
+            }
         }
     }
 
@@ -322,25 +331,27 @@ impl Val {
         if let Some(error) = self.error().or(other.error()) {
             return Err(error);
         }
-        let zero_like = |value: &Val| -> Option<Comparison> {
-            // An empty value compared with `value`.
+        // An empty value compared with `value` (never a list or an error: see above and
+        // the first arm below).
+        let zero_like = |value: &Val| -> Comparison {
             match value {
-                Val::Blank => Some(Ordered(Ordering::Equal)),
-                Val::Number(n) => Some(Ordered(Decimal::ZERO.cmp(n))),
-                Val::Text(text) => Some(Ordered("".cmp(fold_text(text).as_str()))),
-                Val::Bool(b) => Some(Ordered(false.cmp(b))),
+                Val::Blank => Ordered(Ordering::Equal),
+                Val::Number(n) => Ordered(Decimal::ZERO.cmp(n)),
+                Val::Text(text) => Ordered("".cmp(fold_text(text).as_str())),
+                Val::Bool(b) => Ordered(false.cmp(b)),
                 Val::Date(_)
                 | Val::DateTime(_)
                 | Val::Duration(_)
                 | Val::Money(..)
-                | Val::Ref(_) => Some(Unknown),
-                Val::List(_) | Val::Error(_) => None,
+                | Val::Ref(_)
+                | Val::List(_)
+                | Val::Error(_) => Unknown,
             }
         };
         Ok(match (self, other) {
             (Val::List(_), _) | (_, Val::List(_)) => return Err(ErrorValue::Value),
-            (Val::Blank, value) => zero_like(value).unwrap_or(Mismatch),
-            (value, Val::Blank) => match zero_like(value).unwrap_or(Mismatch) {
+            (Val::Blank, value) => zero_like(value),
+            (value, Val::Blank) => match zero_like(value) {
                 Ordered(ordering) => Ordered(ordering.reverse()),
                 other @ (Unordered(_) | Unknown | Mismatch) => other,
             },

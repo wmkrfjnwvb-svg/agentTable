@@ -37,14 +37,14 @@ fn day(value: &Val, env: &dyn Env) -> Result<Date, ErrorValue> {
         Val::Date(day) => Ok(*day),
         Val::DateTime(at) => Ok(day_of(*at, env)),
         Val::Text(text) => text.trim().parse::<Date>().map_err(|_| ErrorValue::Value),
-        Val::Error(error) => Err(*error),
         Val::Blank
         | Val::Number(_)
         | Val::Bool(_)
         | Val::Duration(_)
         | Val::Money(..)
         | Val::Ref(_)
-        | Val::List(_) => Err(ErrorValue::Value),
+        | Val::List(_)
+        | Val::Error(_) => Err(ErrorValue::Value),
     }
 }
 
@@ -106,7 +106,6 @@ fn in_units(value: &Val, unit_millis: i64) -> Result<Val, ErrorValue> {
             .checked_div(Decimal::from(unit_millis))
             .map(Val::Number)
             .ok_or(ErrorValue::Num),
-        Val::Error(error) => Err(*error),
         Val::Number(_)
         | Val::Text(_)
         | Val::Bool(_)
@@ -114,7 +113,8 @@ fn in_units(value: &Val, unit_millis: i64) -> Result<Val, ErrorValue> {
         | Val::DateTime(_)
         | Val::Money(..)
         | Val::Ref(_)
-        | Val::List(_) => Err(ErrorValue::Value),
+        | Val::List(_)
+        | Val::Error(_) => Err(ErrorValue::Value),
     }
 }
 

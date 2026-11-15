@@ -234,9 +234,11 @@ pub(crate) fn format(value: &Val, pattern: &str, env: &dyn Env) -> Result<String
                 .ok_or(ErrorValue::Num)?;
             date(day, since_midnight, pattern)
         }
-        Val::Error(error) => Err(*error),
-        Val::Text(_) | Val::Bool(_) | Val::Duration(_) | Val::Ref(_) | Val::List(_) => {
-            Err(ErrorValue::Value)
-        }
+        Val::Text(_)
+        | Val::Bool(_)
+        | Val::Duration(_)
+        | Val::Ref(_)
+        | Val::List(_)
+        | Val::Error(_) => Err(ErrorValue::Value),
     }
 }

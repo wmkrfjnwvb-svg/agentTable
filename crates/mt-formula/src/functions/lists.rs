@@ -1,7 +1,7 @@
 //! Lists (the values of linked records and of multi-value fields), reference data and
 //! parameters.
 
-use crate::ast::{ListFn, LookupFn};
+use crate::ast::LookupFn;
 use crate::error::ErrorValue;
 use crate::eval::Env;
 use crate::functions::numbers::value;
@@ -101,7 +101,6 @@ fn items(value: &Val) -> Vec<Val> {
 /// A key under which equal values (as `=` sees them) are equal texts.
 fn identity(value: &Val) -> String {
     match value {
-        Val::Blank => String::new(),
         Val::Number(n) => format!("n:{}", canonical_string(n)),
         Val::Text(text) => format!("t:{}", fold_text(text)),
         Val::Bool(b) => format!("b:{b}"),
@@ -112,37 +111,50 @@ fn identity(value: &Val) -> String {
             format!("m:{}:{}", currency.code(), canonical_string(amount))
         }
         Val::Ref(item) => format!("r:{item}"),
-        Val::List(_) | Val::Error(_) => "?".to_owned(),
+        // Not items of a list: empty values are dropped first, lists are flat, and errors
+        // were returned before the list got here.
+        Val::Blank | Val::List(_) | Val::Error(_) => String::new(),
     }
 }
 
-/// Evaluates a list function that takes evaluated, error-free arguments.
-pub(crate) fn call(function: ListFn, values: &[Val]) -> Result<Val, ErrorValue> {
-    let list = items(value(values, 0));
-    match function {
-        ListFn::Unique => {
-            let mut seen = BTreeSet::new();
-            Ok(Val::List(
-                list.into_iter()
-                    .filter(|item| !item.is_blank() && seen.insert(identity(item)))
-                    .collect(),
-            ))
-        }
-        ListFn::First => Ok(list.into_iter().next().unwrap_or(Val::Blank)),
-        ListFn::Last => Ok(list.into_iter().next_back().unwrap_or(Val::Blank)),
-        ListFn::Index => {
-            let position = value(values, 1).integer()?;
-            let index = usize::try_from(position)
-                .ok()
-                .and_then(|p| p.checked_sub(1))
-                .ok_or(ErrorValue::Value)?;
-            list.into_iter().nth(index).ok_or(ErrorValue::NotAvailable)
-        }
-        // These take a condition and are evaluated by the evaluator itself.
-        ListFn::CountIf | ListFn::SumIf | ListFn::AverageIf | ListFn::Filter => {
-            Err(ErrorValue::Value)
-        }
-    }
+/// `UNIQUE`: the distinct values, in order of first appearance, without empty ones.
+pub(crate) fn unique(values: &[Val]) -> Val {
+    let mut seen = BTreeSet::new();
+    Val::List(
+        items(value(values, 0))
+            .into_iter()
+            .filter(|item| !item.is_blank() && seen.insert(identity(item)))
+            .collect(),
+    )
+}
+
+/// `FIRST`: the first value, or nothing.
+pub(crate) fn first(values: &[Val]) -> Val {
+    items(value(values, 0))
+        .into_iter()
+        .next()
+        .unwrap_or(Val::Blank)
+}
+
+/// `LAST`: the last value, or nothing.
+pub(crate) fn last(values: &[Val]) -> Val {
+    items(value(values, 0))
+        .into_iter()
+        .next_back()
+        .unwrap_or(Val::Blank)
+}
+
+/// `INDEX`: the value at a position, counting from 1.
+pub(crate) fn index(values: &[Val]) -> Result<Val, ErrorValue> {
+    let position = value(values, 1).integer()?;
+    let index = usize::try_from(position)
+        .ok()
+        .and_then(|p| p.checked_sub(1))
+        .ok_or(ErrorValue::Value)?;
+    items(value(values, 0))
+        .into_iter()
+        .nth(index)
+        .ok_or(ErrorValue::NotAvailable)
 }
 
 /// Evaluates a reference-data or parameter function.
@@ -154,7 +166,6 @@ pub(crate) fn lookup(function: LookupFn, values: &[Val], env: &dyn Env) -> Resul
             let one = |item: &Val| match item {
                 Val::Ref(id) => find(*id).ok_or(ErrorValue::NotAvailable),
                 Val::Blank => Ok(Val::Blank),
-                Val::Error(error) => Err(*error),
                 Val::Number(_)
                 | Val::Text(_)
                 | Val::Bool(_)
@@ -162,7 +173,8 @@ pub(crate) fn lookup(function: LookupFn, values: &[Val], env: &dyn Env) -> Resul
                 | Val::DateTime(_)
                 | Val::Duration(_)
                 | Val::Money(..)
-                | Val::List(_) => Err(ErrorValue::Value),
+                | Val::List(_)
+                | Val::Error(_) => Err(ErrorValue::Value),
             };
             if let Val::List(list) = subject {
                 list.iter()

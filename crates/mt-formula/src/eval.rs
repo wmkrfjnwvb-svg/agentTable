@@ -322,12 +322,14 @@ impl Machine<'_> {
                     .map_or(Val::Blank, |otherwise| self.eval(otherwise))
             }),
             LogicFn::Ifs => {
-                for pair in args.chunks(2) {
-                    if let [condition, value] = pair {
-                        if self.truth(condition)? {
-                            return Ok(self.eval(value));
-                        }
+                let mut index = 0_usize;
+                while let (Some(condition), Some(value)) =
+                    (args.get(index), args.get(index.saturating_add(1)))
+                {
+                    if self.truth(condition)? {
+                        return Ok(self.eval(value));
                     }
+                    index = index.saturating_add(2);
                 }
                 Err(ErrorValue::NotAvailable)
             }
@@ -336,19 +338,20 @@ impl Machine<'_> {
                 if let Some(error) = subject.error() {
                     return Err(error);
                 }
-                let rest = args.get(1..).unwrap_or(&[]);
-                let mut pairs = rest.chunks_exact(2);
-                for pair in pairs.by_ref() {
-                    if let [case, result] = pair {
-                        let case = self.eval(case);
-                        if subject.equals(&case)? {
-                            return Ok(self.eval(result));
-                        }
+                // Pairs of case and result, then possibly a default.
+                let mut index = 1_usize;
+                while let (Some(case), Some(result)) =
+                    (args.get(index), args.get(index.saturating_add(1)))
+                {
+                    let case = self.eval(case);
+                    if subject.equals(&case)? {
+                        return Ok(self.eval(result));
                     }
+                    index = index.saturating_add(2);
                 }
-                match pairs.remainder() {
-                    [default] => Ok(self.eval(default)),
-                    [] | [_, _, ..] => Err(ErrorValue::NotAvailable),
+                match args.get(index) {
+                    Some(default) => Ok(self.eval(default)),
+                    None => Err(ErrorValue::NotAvailable),
                 }
             }
             LogicFn::And => {
@@ -454,10 +457,10 @@ impl Machine<'_> {
                     series.average()
                 }
             }
-            ListFn::Unique | ListFn::First | ListFn::Last | ListFn::Index => {
-                let values = self.arguments(args)?;
-                lists::call(function, &values)
-            }
+            ListFn::Unique => Ok(lists::unique(&self.arguments(args)?)),
+            ListFn::First => Ok(lists::first(&self.arguments(args)?)),
+            ListFn::Last => Ok(lists::last(&self.arguments(args)?)),
+            ListFn::Index => lists::index(&self.arguments(args)?),
         }
     }
 }

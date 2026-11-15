@@ -56,8 +56,6 @@ impl Series {
         for value in values {
             series = match (series, value) {
                 (series, Val::Blank | Val::Text(_) | Val::Bool(_) | Val::Ref(_)) => series,
-                (_, Val::Error(error)) => return Err(*error),
-                (_, Val::List(_)) => return Err(ErrorValue::Value),
                 (Series::Empty, Val::Number(n)) => Series::Numbers(vec![*n]),
                 (Series::Numbers(mut list), Val::Number(n)) => {
                     list.push(*n);
@@ -91,6 +89,7 @@ impl Series {
                     Series::Instants(list)
                 }
                 // Two kinds that cannot be combined, or dates where they make no sense.
+                // (Lists were flattened and errors returned before the values got here.)
                 _ => return Err(ErrorValue::Value),
             };
         }
@@ -107,44 +106,28 @@ impl Series {
         }
     }
 
+    /// The total. Nothing to add up is zero. (Dates never get here: a series that is to
+    /// be added is collected without them.)
     pub(crate) fn sum(&self) -> Result<Val, ErrorValue> {
         match self.decimals() {
             Some((list, kind)) => kind.wrap(total(list)?),
-            None => match self {
-                Series::Empty => Ok(Val::Number(Decimal::ZERO)),
-                Series::Numbers(_)
-                | Series::Money(..)
-                | Series::Durations(_)
-                | Series::Dates(_)
-                | Series::Instants(_) => Err(ErrorValue::Value),
-            },
+            None => Ok(Val::Number(Decimal::ZERO)),
         }
     }
 
+    /// The mean; nothing for no values.
     pub(crate) fn average(&self) -> Result<Val, ErrorValue> {
         match self.decimals() {
             Some((list, kind)) => kind.wrap(mean(list)?),
-            None => match self {
-                Series::Empty => Ok(Val::Blank),
-                Series::Numbers(_)
-                | Series::Money(..)
-                | Series::Durations(_)
-                | Series::Dates(_)
-                | Series::Instants(_) => Err(ErrorValue::Value),
-            },
+            None => Ok(Val::Blank),
         }
     }
 
+    /// The middle value (the mean of the two middle values for an even count); nothing
+    /// for no values.
     fn median(&self) -> Result<Val, ErrorValue> {
         let Some((list, kind)) = self.decimals() else {
-            return match self {
-                Series::Empty => Ok(Val::Blank),
-                Series::Numbers(_)
-                | Series::Money(..)
-                | Series::Durations(_)
-                | Series::Dates(_)
-                | Series::Instants(_) => Err(ErrorValue::Value),
-            };
+            return Ok(Val::Blank);
         };
         let mut sorted = list.to_vec();
         sorted.sort_unstable();
