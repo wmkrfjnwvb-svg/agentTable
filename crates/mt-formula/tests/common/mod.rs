@@ -331,7 +331,7 @@ pub fn run(source: &str) -> String {
 
 /// Evaluates a formula for a record in a world.
 pub fn run_in(source: &str, record: &Rec, world: &World) -> String {
-    show(&evaluate(&compile(source), record, world))
+    show(&evaluate(&compile(source), &Orders, record, world))
 }
 
 /// Checks a table of `(formula, expected)` and reports every difference at once.

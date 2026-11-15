@@ -10,10 +10,18 @@
 //!
 //! `IF`, `IFS`, `SWITCH`, `AND`, `OR`, `IFERROR` and `IFBLANK` evaluate only the arguments
 //! they need, so `IF({n} = 0, 0, {total} / {n})` never divides by zero.
+//!
+//! **Empty dates.** An empty value counts as zero in arithmetic, but an empty *date* is not
+//! day zero: `{Due} - {Start}` and `{Start} + 14` are empty while there is no start, and
+//! date functions return nothing for a missing date. Whether an empty operand is a date is
+//! a question about the formula, not about the value, so the evaluator asks the type
+//! checker — which is why it needs the [`Schema`].
 
 use crate::ast::{BinaryOp, Expr, Function, ListFn, LogicFn, UnaryOp, MAX_DEPTH};
 use crate::error::ErrorValue;
 use crate::functions::{dates, lists, numbers, texts};
+use crate::schema::Schema;
+use crate::types::{static_type, Type};
 use crate::value::{Comparison, Val};
 use core::cmp::Ordering;
 use mt_core::decimal::Decimal;
@@ -93,6 +101,7 @@ fn first_error(values: &[Val]) -> Option<ErrorValue> {
 }
 
 struct Machine<'a> {
+    schema: &'a dyn Schema,
     record: &'a dyn Record,
     env: &'a dyn Env,
     computed: Option<&'a Computed>,
@@ -155,10 +164,31 @@ impl Machine<'_> {
             Expr::Binary { op, left, right } => {
                 let a = self.eval(left);
                 let b = self.eval(right);
+                if matches!(op, BinaryOp::Add | BinaryOp::Subtract)
+                    && a.error().is_none()
+                    && b.error().is_none()
+                    && (self.is_empty_date(&a, left) || self.is_empty_date(&b, right))
+                {
+                    return Val::Blank;
+                }
                 lift(self.binary(*op, &a, &b))
             }
             Expr::Call { function, args } => self.call(*function, args),
         }
+    }
+
+    /// Whether `value`, the result of `expr`, is an empty date or date-time.
+    fn is_empty_date(&mut self, value: &Val, expr: &Expr) -> bool {
+        if *value != Val::Blank {
+            return false;
+        }
+        // Looking at the operand's formula is work too.
+        let cost = u32::try_from(expr.node_count()).unwrap_or(u32::MAX);
+        self.steps = self.steps.saturating_add(cost);
+        matches!(
+            static_type(expr, self.schema),
+            Some(Type::Date | Type::DateTime)
+        )
     }
 
     fn binary(&self, op: BinaryOp, a: &Val, b: &Val) -> Result<Val, ErrorValue> {
@@ -423,10 +453,11 @@ impl Machine<'_> {
     }
 }
 
-/// Evaluates a formula for a record.
+/// Evaluates a formula for a record. `schema` describes the record's table (the one the
+/// formula was parsed against).
 #[must_use]
-pub fn evaluate(expr: &Expr, record: &dyn Record, env: &dyn Env) -> Val {
-    evaluate_with(expr, record, env, None)
+pub fn evaluate(expr: &Expr, schema: &dyn Schema, record: &dyn Record, env: &dyn Env) -> Val {
+    evaluate_with(expr, schema, record, env, None)
 }
 
 /// Evaluates a formula for a record, seeing the results of computed fields evaluated
@@ -434,6 +465,7 @@ pub fn evaluate(expr: &Expr, record: &dyn Record, env: &dyn Env) -> Val {
 #[must_use]
 pub fn evaluate_with(
     expr: &Expr,
+    schema: &dyn Schema,
     record: &dyn Record,
     env: &dyn Env,
     computed: Option<&Computed>,
@@ -442,6 +474,7 @@ pub fn evaluate_with(
         return Val::Error(ErrorValue::Limit);
     }
     let mut machine = Machine {
+        schema,
         record,
         env,
         computed,
@@ -458,10 +491,11 @@ pub fn evaluate_with(
 /// not of the field's kind.
 pub fn evaluate_to(
     expr: &Expr,
+    schema: &dyn Schema,
     record: &dyn Record,
     env: &dyn Env,
     computed: Option<&Computed>,
     target: DataType,
 ) -> Result<Value, ErrorValue> {
-    evaluate_with(expr, record, env, computed).into_value(target, &|item| env.label(item))
+    evaluate_with(expr, schema, record, env, computed).into_value(target, &|item| env.label(item))
 }

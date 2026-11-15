@@ -8,6 +8,11 @@
 //! The checker is deliberately lenient where the evaluator is: text is accepted where a
 //! number is needed (it may be written as a number), and a value of unknown kind
 //! (`PARAM`, `ATTR`, `BLANK()`, `CurrentValue`) fits anywhere.
+//!
+//! Alternatives of different kinds — `IF({n} = 0, "n/a", {total} / {n})` — are fine inside
+//! a formula (the result is of unknown kind, [`Type::Any`]). What a computed *field* stores
+//! is checked separately by [`check_for_field`]: every value the formula can return must fit
+//! the field, because a field holds one kind of value.
 
 use crate::ast::{
     BinaryOp, DateFn, Expr, Function, ListFn, LogicFn, LookupFn, NumberFn, TextFn, UnaryOp,
@@ -119,9 +124,26 @@ impl Type {
     }
 
     /// Whether the type can stand where a number is needed: numbers, text (which may be
-    /// written as a number), true/false and unknown values.
+    /// written as a number) and true/false.
+    const fn numeric(&self) -> bool {
+        matches!(self, Type::Number | Type::Text | Type::Bool)
+    }
+
+    /// As [`Type::numeric`], or of unknown kind.
     const fn number_like(&self) -> bool {
         matches!(self, Type::Number | Type::Text | Type::Bool | Type::Any)
+    }
+
+    /// Whether the type can stand where a date is needed: dates, date-times, text (which
+    /// may be written as `YYYY-MM-DD`) and unknown values.
+    const fn date_like(&self) -> bool {
+        matches!(self, Type::Date | Type::DateTime | Type::Text | Type::Any)
+    }
+
+    /// Whether the type can be a condition: true/false, numbers (zero is false), text
+    /// (`"TRUE"`, `"FALSE"`) and unknown values.
+    const fn condition_like(&self) -> bool {
+        self.number_like()
     }
 }
 
@@ -129,25 +151,24 @@ fn mismatch(message: String) -> FormulaError {
     FormulaError::typing(message)
 }
 
-/// The common type of two alternatives (the branches of an `IF`).
-fn unify(a: Type, b: Type) -> Result<Type, FormulaError> {
+/// The common type of two alternatives (the branches of an `IF`): the type both have, or
+/// [`Type::Any`] when they differ. A value of unknown kind is assumed to fit the other.
+fn unify(a: Type, b: Type) -> Type {
     match (a, b) {
-        (Type::Any, other) | (other, Type::Any) => Ok(other),
-        (Type::List(a), Type::List(b)) => Ok(Type::List(Box::new(unify(*a, *b)?))),
-        (a, b) if a == b => Ok(a),
-        (a, b) => Err(mismatch(format!(
-            "the formula returns {} in one case and {} in another; a field holds one kind of value",
-            a.words(),
-            b.words()
-        ))),
+        (Type::Any, other) | (other, Type::Any) => other,
+        (Type::List(a), Type::List(b)) => Type::List(Box::new(unify(*a, *b))),
+        (a, b) if a == b => a,
+        _ => Type::Any,
     }
 }
 
-fn unify_all(types: impl IntoIterator<Item = Type>) -> Result<Type, FormulaError> {
-    types.into_iter().try_fold(Type::Any, unify)
+fn unify_all(types: impl IntoIterator<Item = Type>) -> Type {
+    types.into_iter().fold(Type::Any, unify)
 }
 
-/// The result type of an arithmetic operator.
+/// The result type of an arithmetic operator. Where an operand of unknown kind leaves more
+/// than one possibility (a number plus an unknown value is a number or a date), the result
+/// is of unknown kind too.
 fn arithmetic(op: BinaryOp, a: &Type, b: &Type) -> Result<Type, FormulaError> {
     use Type::{Any, Date, DateTime, Duration, Money, Number};
     if a.is_list() || b.is_list() {
@@ -156,36 +177,59 @@ fn arithmetic(op: BinaryOp, a: &Type, b: &Type) -> Result<Type, FormulaError> {
             op.symbol()
         )));
     }
-    let both_numbers = a.number_like() && b.number_like();
     let result = match op {
         BinaryOp::Add => match (a, b) {
+            (Any, Any) => Some(Any),
             (Money, Money | Any) | (Any, Money) => Some(Money),
             (Date, other) | (other, Date) if other.number_like() => Some(Date),
             (DateTime, Duration | Any) | (Duration | Any, DateTime) => Some(DateTime),
-            (Duration, Duration | Any) | (Any, Duration) => Some(Duration),
-            _ => both_numbers.then_some(Number),
+            (Duration, Duration) => Some(Duration),
+            // A duration plus an unknown value: a duration or a date-time.
+            (Duration, Any) | (Any, Duration) => Some(Any),
+            (x, y) if x.numeric() && y.numeric() => Some(Number),
+            // A number plus an unknown value: a number or a date.
+            (x, Any) | (Any, x) if x.numeric() => Some(Any),
+            _ => None,
         },
         BinaryOp::Subtract => match (a, b) {
+            (Any, Any) => Some(Any),
             (Money, Money | Any) | (Any, Money) => Some(Money),
-            (Date, Date) => Some(Number),
-            (Date, other) if other.number_like() => Some(Date),
-            (DateTime, DateTime) => Some(Duration),
+            (Date, Date) | (Any, Date) => Some(Number),
+            // A date minus an unknown value: a date (minus days) or days (minus a date).
+            (Date, Any) => Some(Any),
+            (Date, other) if other.numeric() => Some(Date),
+            (DateTime, DateTime) | (Any, DateTime) => Some(Duration),
             (DateTime, Duration) => Some(DateTime),
             (DateTime, Any) => Some(Any),
-            (Duration, Duration | Any) | (Any, Duration) => Some(Duration),
-            _ => both_numbers.then_some(Number),
+            (Duration, Duration | Any) => Some(Duration),
+            // An unknown value minus a duration: a duration or a date-time.
+            (Any, Duration) => Some(Any),
+            (x, y) if x.numeric() && y.number_like() => Some(Number),
+            // An unknown value minus a number: a number or a date.
+            (Any, y) if y.numeric() => Some(Any),
+            _ => None,
         },
         BinaryOp::Multiply => match (a, b) {
+            (Any, Any) => Some(Any),
             (Money, Money) | (Duration, Duration) => None,
             (Money, other) | (other, Money) if other.number_like() => Some(Money),
             (Duration, other) | (other, Duration) if other.number_like() => Some(Duration),
-            _ => both_numbers.then_some(Number),
+            (x, y) if x.numeric() && y.numeric() => Some(Number),
+            // A number times an unknown value: a number, an amount or a duration.
+            (x, Any) | (Any, x) if x.numeric() => Some(Any),
+            _ => None,
         },
         BinaryOp::Divide => match (a, b) {
-            (Money, Money) | (Duration, Duration) => Some(Number),
-            (Money, other) if other.number_like() => Some(Money),
-            (Duration, other) if other.number_like() => Some(Duration),
-            _ => both_numbers.then_some(Number),
+            (Any, Any) => Some(Any),
+            (Money, Money) | (Duration, Duration) | (Any, Money | Duration) => Some(Number),
+            // An amount divided by an unknown value: a ratio or an amount.
+            (Money | Duration, Any) => Some(Any),
+            (Money, other) if other.numeric() => Some(Money),
+            (Duration, other) if other.numeric() => Some(Duration),
+            (x, y) if x.numeric() && y.number_like() => Some(Number),
+            // An unknown value divided by a number: a number, an amount or a duration.
+            (Any, y) if y.numeric() => Some(Any),
+            _ => None,
         },
         // Not arithmetic; handled by the caller.
         BinaryOp::Concat
@@ -206,12 +250,23 @@ fn arithmetic(op: BinaryOp, a: &Type, b: &Type) -> Result<Type, FormulaError> {
     })
 }
 
-fn comparison(op: BinaryOp, a: &Type, b: &Type) -> Result<Type, FormulaError> {
+/// The result type of a comparison. `with_empty_text` says that one side is the literal
+/// `""`: `{Due} = ""` is the spreadsheet way of asking whether there is a value.
+fn comparison(
+    op: BinaryOp,
+    a: &Type,
+    b: &Type,
+    with_empty_text: bool,
+) -> Result<Type, FormulaError> {
     if a.is_list() || b.is_list() {
         return Err(mismatch(format!(
             "`{}` cannot compare a list; use CONTAINS, COUNTIF or FILTER",
             op.symbol()
         )));
+    }
+    let ordering = !matches!(op, BinaryOp::Equal | BinaryOp::NotEqual);
+    if with_empty_text && !ordering {
+        return Ok(Type::Bool);
     }
     let known_and_different = *a != Type::Any && *b != Type::Any && a != b;
     if known_and_different {
@@ -222,7 +277,6 @@ fn comparison(op: BinaryOp, a: &Type, b: &Type) -> Result<Type, FormulaError> {
             b.words()
         )));
     }
-    let ordering = !matches!(op, BinaryOp::Equal | BinaryOp::NotEqual);
     if ordering && (*a == Type::Reference || *b == Type::Reference) {
         return Err(mismatch(format!(
             "`{}` cannot order references; compare their LABEL or CODE",
@@ -236,6 +290,7 @@ fn comparison(op: BinaryOp, a: &Type, b: &Type) -> Result<Type, FormulaError> {
 fn aggregate(name: &str, args: &[Type], with_dates: bool) -> Result<Type, FormulaError> {
     let mut kind: Option<Type> = None;
     let mut plain_number = false;
+    let mut unknown = false;
     for arg in args {
         let element = arg.element();
         let found = match element {
@@ -245,8 +300,12 @@ fn aggregate(name: &str, args: &[Type], with_dates: bool) -> Result<Type, Formul
                 plain_number = true;
                 continue;
             }
-            // Skipped at evaluation, or possibly numbers.
-            Type::Text | Type::Bool | Type::Any | Type::Reference => continue,
+            Type::Any => {
+                unknown = true;
+                continue;
+            }
+            // Skipped at evaluation.
+            Type::Text | Type::Bool | Type::Reference => continue,
             Type::Date | Type::DateTime if with_dates => element.clone(),
             Type::Date | Type::DateTime | Type::List(_) => {
                 return Err(mismatch(format!(
@@ -272,6 +331,7 @@ fn aggregate(name: &str, args: &[Type], with_dates: bool) -> Result<Type, Formul
             kind.words()
         ))),
         Some(kind) => Ok(kind),
+        None if unknown && !plain_number => Ok(Type::Any),
         None => Ok(Type::Number),
     }
 }
@@ -292,6 +352,61 @@ fn literal(args: &[Expr], index: usize) -> Option<&str> {
         )
         | None => None,
     }
+}
+
+fn is_empty_text(expr: &Expr) -> bool {
+    matches!(expr, Expr::Text(text) if text.trim().is_empty())
+}
+
+/// The arguments of a logic function that are possible results of it (empty for the
+/// functions that return true or false).
+fn alternatives(function: LogicFn, args: &[Expr]) -> Vec<&Expr> {
+    match function {
+        LogicFn::If => args.iter().skip(1).collect(),
+        LogicFn::Ifs => args.iter().skip(1).step_by(2).collect(),
+        LogicFn::Switch => {
+            // Every second argument from the third, plus a final default.
+            let count = args.len();
+            let has_default = count.checked_rem(2) == Some(0);
+            args.iter()
+                .enumerate()
+                .filter_map(|(index, arg)| {
+                    let is_result = index >= 2 && index.checked_rem(2) == Some(0);
+                    let is_default = has_default && index.saturating_add(1) == count;
+                    (is_result || is_default).then_some(arg)
+                })
+                .collect()
+        }
+        LogicFn::IfError | LogicFn::IfBlank => args.iter().collect(),
+        LogicFn::And
+        | LogicFn::Or
+        | LogicFn::Not
+        | LogicFn::Xor
+        | LogicFn::IsBlank
+        | LogicFn::IsError
+        | LogicFn::IsNumber
+        | LogicFn::IsText
+        | LogicFn::Blank => Vec::new(),
+    }
+}
+
+/// The expressions whose value the formula can return: the formula itself, or the
+/// alternatives of the `IF`, `IFS`, `SWITCH`, `IFERROR` or `IFBLANK` at its top.
+fn outcomes<'e>(expr: &'e Expr, out: &mut Vec<&'e Expr>) {
+    if let Expr::Call {
+        function: Function::Logic(function),
+        args,
+    } = expr
+    {
+        let alternatives = alternatives(*function, args);
+        if !alternatives.is_empty() {
+            for alternative in alternatives {
+                outcomes(alternative, out);
+            }
+            return;
+        }
+    }
+    out.push(expr);
 }
 
 struct Checker<'s> {
@@ -354,7 +469,8 @@ impl Checker<'_> {
                 match (&operand, op) {
                     (Type::Money, _) => Ok(Type::Money),
                     (Type::Duration, _) => Ok(Type::Duration),
-                    (other, _) if other.number_like() => Ok(Type::Number),
+                    (Type::Any, _) => Ok(Type::Any),
+                    (other, _) if other.numeric() => Ok(Type::Number),
                     (other, UnaryOp::Negate) => {
                         Err(mismatch(format!("`-` cannot negate {}", other.words())))
                     }
@@ -377,13 +493,17 @@ impl Checker<'_> {
                     | BinaryOp::Less
                     | BinaryOp::LessOrEqual
                     | BinaryOp::Greater
-                    | BinaryOp::GreaterOrEqual => comparison(*op, &a, &b),
+                    | BinaryOp::GreaterOrEqual => {
+                        let with_empty_text = is_empty_text(left) || is_empty_text(right);
+                        comparison(*op, &a, &b, with_empty_text)
+                    }
                 }
             }
             Expr::Call { function, args } => self.call(*function, args, in_condition),
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn call(
         &self,
         function: Function,
@@ -403,34 +523,55 @@ impl Checker<'_> {
         }
         let first = types.first().cloned().unwrap_or(Type::Any);
         let name = function.name();
+        // An argument, when it is given, must be of a kind the function can use.
+        let need = |index: usize, what: &str, fits: fn(&Type) -> bool| match types.get(index) {
+            Some(found) if !fits(found) => Err(mismatch(format!(
+                "{name} needs {what} as argument {}, not {}",
+                index.saturating_add(1),
+                found.words()
+            ))),
+            Some(_) | None => Ok(()),
+        };
+        let number = |index: usize| need(index, "a number", Type::number_like);
+        let date = |index: usize| need(index, "a date", Type::date_like);
+        let condition = |index: usize| need(index, "a condition", Type::condition_like);
         match function {
             Function::Logic(function) => match function {
-                LogicFn::If => unify(
-                    types.get(1).cloned().unwrap_or(Type::Any),
-                    types.get(2).cloned().unwrap_or(Type::Any),
-                ),
-                LogicFn::Ifs => unify_all(types.into_iter().skip(1).step_by(2)),
-                LogicFn::Switch => {
-                    // Results are every second argument from the third, plus a final default.
-                    let count = types.len();
-                    let has_default = count.checked_rem(2) == Some(0);
-                    let results = types.into_iter().enumerate().filter_map(|(index, t)| {
-                        let is_result = index >= 2 && index.checked_rem(2) == Some(0);
-                        let is_default = has_default && index.saturating_add(1) == count;
-                        (is_result || is_default).then_some(t)
-                    });
-                    unify_all(results)
+                LogicFn::If | LogicFn::Ifs | LogicFn::Switch | LogicFn::IfError | LogicFn::IfBlank => {
+                    match function {
+                        LogicFn::If => condition(0)?,
+                        LogicFn::Ifs => {
+                            for index in (0..types.len()).step_by(2) {
+                                condition(index)?;
+                            }
+                        }
+                        LogicFn::Switch
+                        | LogicFn::IfError
+                        | LogicFn::IfBlank
+                        | LogicFn::And
+                        | LogicFn::Or
+                        | LogicFn::Not
+                        | LogicFn::Xor
+                        | LogicFn::IsBlank
+                        | LogicFn::IsError
+                        | LogicFn::IsNumber
+                        | LogicFn::IsText
+                        | LogicFn::Blank => {}
+                    }
+                    let mut results = Vec::new();
+                    for alternative in alternatives(function, args) {
+                        results.push(self.infer(alternative, in_condition)?);
+                    }
+                    Ok(unify_all(results))
                 }
-                LogicFn::And
-                | LogicFn::Or
-                | LogicFn::Not
-                | LogicFn::Xor
-                | LogicFn::IsBlank
-                | LogicFn::IsError
-                | LogicFn::IsNumber
-                | LogicFn::IsText => Ok(Type::Bool),
-                LogicFn::IfError | LogicFn::IfBlank => {
-                    unify(first, types.get(1).cloned().unwrap_or(Type::Any))
+                LogicFn::And | LogicFn::Or | LogicFn::Not | LogicFn::Xor => {
+                    for index in 0..types.len() {
+                        condition(index)?;
+                    }
+                    Ok(Type::Bool)
+                }
+                LogicFn::IsBlank | LogicFn::IsError | LogicFn::IsNumber | LogicFn::IsText => {
+                    Ok(Type::Bool)
                 }
                 LogicFn::Blank => Ok(Type::Any),
             },
@@ -446,33 +587,54 @@ impl Checker<'_> {
                 | NumberFn::RoundDown
                 | NumberFn::Ceiling
                 | NumberFn::Floor => {
-                    if first == Type::Money {
-                        Ok(Type::Money)
-                    } else if first.number_like() {
-                        Ok(Type::Number)
-                    } else {
-                        Err(mismatch(format!(
-                            "{name} needs a number, not {}",
-                            first.words()
-                        )))
+                    number(1)?;
+                    match first {
+                        Type::Money => Ok(Type::Money),
+                        Type::Any => Ok(Type::Any),
+                        Type::Number | Type::Text | Type::Bool => Ok(Type::Number),
+                        other @ (Type::Date
+                        | Type::DateTime
+                        | Type::Duration
+                        | Type::Reference
+                        | Type::List(_)) => Err(mismatch(format!(
+                            "{name} needs a number or an amount, not {}",
+                            other.words()
+                        ))),
                     }
                 }
-                NumberFn::Sign | NumberFn::Int | NumberFn::Mod | NumberFn::Power => {
+                NumberFn::Sign => {
+                    need(0, "a number or an amount", |t| {
+                        t.number_like() || *t == Type::Money
+                    })?;
+                    Ok(Type::Number)
+                }
+                NumberFn::Int => {
+                    number(0)?;
+                    Ok(Type::Number)
+                }
+                NumberFn::Mod | NumberFn::Power => {
+                    number(0)?;
+                    number(1)?;
                     Ok(Type::Number)
                 }
             },
             Function::Text(function) => match function {
-                TextFn::Concat
-                | TextFn::TextJoin
-                | TextFn::Left
-                | TextFn::Right
-                | TextFn::Mid
-                | TextFn::Upper
-                | TextFn::Lower
-                | TextFn::Trim
-                | TextFn::Substitute
-                | TextFn::Replace
-                | TextFn::Rept => Ok(Type::Text),
+                TextFn::Concat | TextFn::TextJoin | TextFn::Upper | TextFn::Lower | TextFn::Trim => {
+                    Ok(Type::Text)
+                }
+                TextFn::Left | TextFn::Right | TextFn::Rept => {
+                    number(1)?;
+                    Ok(Type::Text)
+                }
+                TextFn::Mid | TextFn::Replace => {
+                    number(1)?;
+                    number(2)?;
+                    Ok(Type::Text)
+                }
+                TextFn::Substitute => {
+                    number(3)?;
+                    Ok(Type::Text)
+                }
                 TextFn::Text => match first {
                     Type::Number | Type::Money | Type::Date | Type::DateTime | Type::Any => {
                         Ok(Type::Text)
@@ -486,7 +648,15 @@ impl Checker<'_> {
                         other.words()
                     ))),
                 },
-                TextFn::Len | TextFn::Find | TextFn::Search | TextFn::Value => Ok(Type::Number),
+                TextFn::Len => Ok(Type::Number),
+                TextFn::Find | TextFn::Search => {
+                    number(2)?;
+                    Ok(Type::Number)
+                }
+                TextFn::Value => {
+                    number(0)?;
+                    Ok(Type::Number)
+                }
                 TextFn::Exact | TextFn::Contains => Ok(Type::Bool),
             },
             Function::Date(function) => {
@@ -500,13 +670,21 @@ impl Checker<'_> {
                     Some(_) | None => Ok(()),
                 };
                 match function {
-                    DateFn::Today
-                    | DateFn::Date
-                    | DateFn::EDate
-                    | DateFn::EoMonth
-                    | DateFn::Workday => Ok(Type::Date),
+                    DateFn::Today => Ok(Type::Date),
                     DateFn::Now => Ok(Type::DateTime),
+                    DateFn::Date => {
+                        number(0)?;
+                        number(1)?;
+                        number(2)?;
+                        Ok(Type::Date)
+                    }
+                    DateFn::EDate | DateFn::EoMonth | DateFn::Workday => {
+                        date(0)?;
+                        number(1)?;
+                        Ok(Type::Date)
+                    }
                     DateFn::DateAdd => {
+                        number(1)?;
                         unit_ok(
                             2,
                             &[
@@ -524,13 +702,20 @@ impl Checker<'_> {
                             | Type::Money
                             | Type::Reference
                             | Type::List(_)) => Err(mismatch(format!(
-                                "DATEADD needs a date, not {}",
+                                "DATEADD needs a date as argument 1, not {}",
                                 other.words()
                             ))),
                         }
                     }
                     DateFn::DateDif => {
+                        date(0)?;
+                        date(1)?;
                         unit_ok(2, &["d", "m", "y"])?;
+                        Ok(Type::Number)
+                    }
+                    DateFn::Days | DateFn::NetworkDays => {
+                        date(0)?;
+                        date(1)?;
                         Ok(Type::Number)
                     }
                     DateFn::Year
@@ -538,13 +723,27 @@ impl Checker<'_> {
                     | DateFn::Day
                     | DateFn::Hour
                     | DateFn::Minute
-                    | DateFn::Weekday
-                    | DateFn::IsoWeekNum
-                    | DateFn::Days
-                    | DateFn::NetworkDays
-                    | DateFn::ToHours
-                    | DateFn::ToDays => Ok(Type::Number),
-                    DateFn::Duration => Ok(Type::Duration),
+                    | DateFn::IsoWeekNum => {
+                        date(0)?;
+                        Ok(Type::Number)
+                    }
+                    DateFn::Weekday => {
+                        date(0)?;
+                        number(1)?;
+                        Ok(Type::Number)
+                    }
+                    DateFn::ToHours | DateFn::ToDays => {
+                        need(0, "a duration", |t| {
+                            matches!(t, Type::Duration | Type::Any)
+                        })?;
+                        Ok(Type::Number)
+                    }
+                    DateFn::Duration => {
+                        number(0)?;
+                        number(1)?;
+                        number(2)?;
+                        Ok(Type::Duration)
+                    }
                 }
             }
             Function::List(function) => match function {
@@ -556,7 +755,11 @@ impl Checker<'_> {
                 ListFn::Filter | ListFn::Unique => {
                     Ok(Type::List(Box::new(first.element().clone())))
                 }
-                ListFn::First | ListFn::Last | ListFn::Index => Ok(first.element().clone()),
+                ListFn::First | ListFn::Last => Ok(first.element().clone()),
+                ListFn::Index => {
+                    number(1)?;
+                    Ok(first.element().clone())
+                }
             },
             Function::Lookup(function) => match function {
                 LookupFn::Label | LookupFn::Code => match first {
@@ -577,8 +780,11 @@ impl Checker<'_> {
                         other.words()
                     ))),
                 },
-                LookupFn::Attr => match first.element() {
+                LookupFn::Attr => match &first {
                     Type::Reference | Type::Any => Ok(Type::Any),
+                    Type::List(element) if matches!(**element, Type::Reference | Type::Any) => {
+                        Ok(Type::List(Box::new(Type::Any)))
+                    }
                     other @ (Type::Number
                     | Type::Text
                     | Type::Bool
@@ -602,6 +808,13 @@ impl Checker<'_> {
     }
 }
 
+/// The type of an expression as far as it can be told without evaluating it; `None` for an
+/// expression that does not pass the checker. Used by the evaluator to tell an empty date
+/// from an empty number.
+pub(crate) fn static_type(expr: &Expr, schema: &dyn Schema) -> Option<Type> {
+    Checker { schema }.infer(expr, true).ok()
+}
+
 /// Checks a formula against the schema and returns the type of its result.
 ///
 /// # Errors
@@ -618,23 +831,9 @@ pub fn check(expr: &Expr, schema: &dyn Schema) -> Result<Type, FormulaError> {
     Checker { schema }.infer(expr, false)
 }
 
-/// Checks a formula and that its result can be stored in a computed field of the given
-/// data type.
-///
-/// # Errors
-/// As [`check`], and [`FormulaError::Type`] when the result does not fit the field.
-pub fn check_for_field(
-    expr: &Expr,
-    schema: &dyn Schema,
-    field: DataType,
-) -> Result<Type, FormulaError> {
-    let found = check(expr, schema)?;
-    let fits = match (field, &found) {
-        (DataType::Link | DataType::Principal | DataType::Attachment | DataType::Json, _) => {
-            return Err(mismatch(format!(
-                "a computed field cannot be a {field} field"
-            )));
-        }
+/// Whether a value of type `found` can be stored in a computed field of type `field`.
+fn fits(field: DataType, found: &Type) -> bool {
+    match (field, found) {
         (_, Type::Any) | (DataType::Text | DataType::LongText, _) => true,
         (DataType::Number | DataType::Percent, Type::Number)
         | (DataType::Money, Type::Money)
@@ -647,13 +846,40 @@ pub fn check_for_field(
             matches!(**element, Type::Reference | Type::Any)
         }
         _ => false,
-    };
-    if fits {
-        Ok(found)
-    } else {
-        Err(mismatch(format!(
-            "the formula returns {}, but the field is a {field} field",
-            found.words()
-        )))
     }
+}
+
+/// Checks a formula and that everything it can return can be stored in a computed field of
+/// the given data type. `IF({n} = 0, "n/a", {total} / {n})` is fine for a text field and
+/// refused for a number field, where the `"n/a"` records would show an error.
+///
+/// # Errors
+/// As [`check`], and [`FormulaError::Type`] when a result does not fit the field.
+pub fn check_for_field(
+    expr: &Expr,
+    schema: &dyn Schema,
+    field: DataType,
+) -> Result<Type, FormulaError> {
+    let found = check(expr, schema)?;
+    if matches!(
+        field,
+        DataType::Link | DataType::Principal | DataType::Attachment | DataType::Json
+    ) {
+        return Err(mismatch(format!(
+            "a computed field cannot be a {field} field"
+        )));
+    }
+    let mut results = Vec::new();
+    outcomes(expr, &mut results);
+    let checker = Checker { schema };
+    for result in results {
+        let result = checker.infer(result, false)?;
+        if !fits(field, &result) {
+            return Err(mismatch(format!(
+                "the formula can return {}, but the field is a {field} field",
+                result.words()
+            )));
+        }
+    }
+    Ok(found)
 }

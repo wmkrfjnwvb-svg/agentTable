@@ -118,10 +118,55 @@ fn in_units(value: &Val, unit_millis: i64) -> Result<Val, ErrorValue> {
     }
 }
 
+/// Whether a date argument is missing: no value, or blank text.
+fn missing(value: &Val) -> bool {
+    match value {
+        Val::Blank => true,
+        Val::Text(text) => text.trim().is_empty(),
+        Val::Number(_)
+        | Val::Bool(_)
+        | Val::Date(_)
+        | Val::DateTime(_)
+        | Val::Duration(_)
+        | Val::Money(..)
+        | Val::Ref(_)
+        | Val::List(_)
+        | Val::Error(_) => false,
+    }
+}
+
+/// How many leading arguments of a function are dates. Without one of them there is
+/// nothing to calculate, and the result is empty rather than an error.
+const fn date_arguments(function: DateFn) -> usize {
+    match function {
+        DateFn::Year
+        | DateFn::Month
+        | DateFn::Day
+        | DateFn::Hour
+        | DateFn::Minute
+        | DateFn::Weekday
+        | DateFn::IsoWeekNum
+        | DateFn::DateAdd
+        | DateFn::EDate
+        | DateFn::EoMonth
+        | DateFn::Workday => 1,
+        DateFn::DateDif | DateFn::Days | DateFn::NetworkDays => 2,
+        DateFn::Today
+        | DateFn::Now
+        | DateFn::Date
+        | DateFn::Duration
+        | DateFn::ToHours
+        | DateFn::ToDays => 0,
+    }
+}
+
 /// Evaluates a date function on evaluated, error-free arguments.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn call(function: DateFn, values: &[Val], env: &dyn Env) -> Result<Val, ErrorValue> {
     let arg = |index: usize| value(values, index);
+    if (0..date_arguments(function)).any(|index| missing(arg(index))) {
+        return Ok(Val::Blank);
+    }
     match function {
         DateFn::Today => Ok(Val::Date(env.today())),
         DateFn::Now => Ok(Val::DateTime(env.now())),

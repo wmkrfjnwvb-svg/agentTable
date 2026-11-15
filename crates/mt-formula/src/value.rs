@@ -14,6 +14,10 @@
 //!   is money; money divided by money is a number.
 //! * A date plus a whole number of days is a date; a date minus a date is a number of days;
 //!   a date-time minus a date-time is a duration.
+//! * Calculating with an **empty date** gives an empty result, not a wrong one:
+//!   `{Due} - {Start}` is empty while there is no start. The evaluator decides this (it
+//!   knows which operand is a date); the operations in this module see an empty value as
+//!   zero.
 //! * Text is not a number unless it is written as one (`"12.5"`); anything else is `#VALUE!`.
 //! * Comparing values of different kinds: `=` is false, `<>` is true, an ordering is
 //!   `#VALUE!`.
@@ -131,6 +135,12 @@ impl Val {
                 .normalized())
             }
             (Val::Number(n), DataType::Number) => Ok(Value::Number(n.normalize())),
+            // Calculating with nothing but empty amounts or durations leaves a plain zero:
+            // there is no currency to state an amount in, so the cell is empty.
+            (Val::Number(n), DataType::Money) if n.is_zero() => Ok(Value::Null),
+            (Val::Number(n), DataType::Duration) if n.is_zero() => {
+                Ok(Value::Duration(DurationMs::from_millis(0)))
+            }
             (Val::Number(n), DataType::Percent) => Ok(Value::Percent(n.normalize())),
             (Val::Money(amount, currency), DataType::Money) => Ok(Value::Money(Money::rounded(
                 amount,
@@ -389,8 +399,10 @@ impl Val {
             (Val::Money(a, c), Val::Blank) | (Val::Blank, Val::Money(a, c)) => {
                 Ok(Val::Money(*a, *c))
             }
-            (Val::Date(d), n @ (Val::Number(_) | Val::Blank))
-            | (n @ (Val::Number(_) | Val::Blank), Val::Date(d)) => days(d, n),
+            (Val::Date(d), n @ (Val::Number(_) | Val::Blank | Val::Text(_) | Val::Bool(_)))
+            | (n @ (Val::Number(_) | Val::Blank | Val::Text(_) | Val::Bool(_)), Val::Date(d)) => {
+                days(d, n)
+            }
             (Val::DateTime(t), Val::Duration(d)) | (Val::Duration(d), Val::DateTime(t)) => {
                 t.checked_add(*d).map(Val::DateTime).ok_or(ErrorValue::Num)
             }
@@ -438,7 +450,7 @@ impl Val {
             (Val::Date(a), Val::Date(b)) => Ok(Val::Number(Decimal::from(
                 i64::from(a.days()).saturating_sub(i64::from(b.days())),
             ))),
-            (Val::Date(d), n @ (Val::Number(_) | Val::Blank)) => {
+            (Val::Date(d), n @ (Val::Number(_) | Val::Blank | Val::Text(_) | Val::Bool(_))) => {
                 let count = n.integer()?.checked_neg().ok_or(ErrorValue::Num)?;
                 let count = i32::try_from(count).map_err(|_| ErrorValue::Num)?;
                 d.checked_add_days(count)
@@ -522,6 +534,11 @@ impl Val {
                 ratio(Decimal::from(a.millis()), Decimal::from(b.millis())).map(Val::Number)
             }
             (Val::Duration(d), divisor) => scale_duration(*d, divisor.number()?, false),
+            // An empty amount or duration is zero of its kind.
+            (Val::Blank, Val::Money(b, _)) => ratio(Decimal::ZERO, *b).map(Val::Number),
+            (Val::Blank, Val::Duration(b)) => {
+                ratio(Decimal::ZERO, Decimal::from(b.millis())).map(Val::Number)
+            }
             (_, Val::Money(..) | Val::Duration(_)) => Err(ErrorValue::Value),
             _ => ratio(self.number()?, other.number()?).map(Val::Number),
         }

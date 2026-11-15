@@ -15,7 +15,7 @@
 use crate::ast::{DateFn, Expr, Function, ListFn, LookupFn};
 use crate::error::{ErrorValue, FormulaError};
 use crate::eval::{evaluate_to, Computed, Env, Record};
-use mt_core::field::DataType;
+use crate::schema::Schema;
 use mt_core::id::{FieldId, TableId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -445,16 +445,16 @@ impl Graph {
     }
 
     /// Evaluates computed fields of one record in order; each formula sees the results
-    /// before it. `only` restricts the evaluation to some fields (a partial recompute; the
-    /// others are read from the record as stored). `type_of` gives the data type of a
-    /// computed field; a field without one is skipped.
+    /// before it. `schema` describes the record's table; a computed field it does not know
+    /// is skipped. `only` restricts the evaluation to some fields (a partial recompute; the
+    /// others are read from the record as stored).
     #[must_use]
     pub fn compute(
         &self,
         table: TableId,
+        schema: &dyn Schema,
         record: &dyn Record,
         env: &dyn Env,
-        type_of: &dyn Fn(FieldId) -> Option<DataType>,
         only: Option<&BTreeSet<FieldId>>,
     ) -> Computed {
         let mut computed = Computed::new();
@@ -462,11 +462,12 @@ impl Graph {
             if only.is_some_and(|wanted| !wanted.contains(&field)) {
                 continue;
             }
-            let (Some(expr), Some(data_type)) = (self.expr(table, field), type_of(field)) else {
+            let (Some(expr), Some(data_type)) = (self.expr(table, field), schema.field_type(field))
+            else {
                 continue;
             };
             let result: Result<_, ErrorValue> =
-                evaluate_to(expr, record, env, Some(&computed), data_type);
+                evaluate_to(expr, schema, record, env, Some(&computed), data_type);
             computed.insert(field, result);
         }
         computed

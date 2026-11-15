@@ -481,6 +481,38 @@ fn std_moving_and_measuring_dates() {
 }
 
 #[test]
+fn edge_date_functions_without_a_date_return_nothing() {
+    check(&[
+        ("YEAR({Empty date})", "(blank)"),
+        ("MONTH({Empty date})", "(blank)"),
+        ("DAY({Empty date})", "(blank)"),
+        ("HOUR({Empty date})", "(blank)"),
+        ("MINUTE({Empty date})", "(blank)"),
+        ("WEEKDAY({Empty date})", "(blank)"),
+        ("ISOWEEKNUM({Empty date})", "(blank)"),
+        (r#"DATEADD({Empty date}, 1, "month")"#, "(blank)"),
+        ("EDATE({Empty date}, 6)", "(blank)"),
+        ("EOMONTH({Empty date}, 0)", "(blank)"),
+        ("WORKDAY({Empty date}, 5)", "(blank)"),
+        (r#"DATEDIF({Empty date}, {Due}, "D")"#, "(blank)"),
+        (r#"DATEDIF({Due}, {Empty date}, "D")"#, "(blank)"),
+        ("DAYS({Due}, {Empty date})", "(blank)"),
+        ("DAYS({Empty date}, {Due})", "(blank)"),
+        ("NETWORKDAYS({Empty date}, {Due})", "(blank)"),
+        ("NETWORKDAYS({Due}, {Empty date})", "(blank)"),
+        // Blank text is no date either.
+        (r#"YEAR("")"#, "(blank)"),
+        ("YEAR({Empty text})", "(blank)"),
+        // The other arguments are still looked at when there is a date.
+        (r#"DATEADD({Due}, {Empty number}, "day")"#, "2026-05-20"),
+        ("EDATE({Due}, {Empty number})", "2026-05-20"),
+        // A whole formula over an optional date stays empty without any IF.
+        (r#"IFBLANK(TEXT(EDATE({Empty date}, 6), "d mmm yyyy"), "not planned")"#, r#""not planned""#),
+        ("YEAR({Empty date}) = 2026", "FALSE"),
+    ]);
+}
+
+#[test]
 fn std_working_days() {
     check(&[
         // Wednesday 13 May to Wednesday 20 May, both counted.
@@ -529,7 +561,6 @@ fn invalid_date_arguments() {
         (r#"YEAR("nope")"#, "#VALUE!"),
         (r#"YEAR("2026-02-30")"#, "#VALUE!"),
         ("YEAR(5)", "#VALUE!"),
-        ("YEAR({Empty date})", "#VALUE!"),
         ("MONTH({Effort})", "#VALUE!"),
         ("DAY({Status})", "#VALUE!"),
         ("DAY({Tags})", "#VALUE!"),

@@ -151,6 +151,66 @@ fn std_dates_times_and_durations() {
 }
 
 #[test]
+fn edge_calculating_with_an_empty_date_gives_nothing() {
+    check(&[
+        // An empty date is not day zero.
+        ("{Empty date} + 7", "(blank)"),
+        ("7 + {Empty date}", "(blank)"),
+        ("{Empty date} - 7", "(blank)"),
+        ("{Due} - {Empty date}", "(blank)"),
+        ("{Empty date} - {Due}", "(blank)"),
+        ("{Empty date} - {Empty date}", "(blank)"),
+        ("TODAY() - {Empty date}", "(blank)"),
+        // Also when the date comes out of a calculation.
+        ("TODAY() - MAX({Empty date})", "(blank)"),
+        ("{Due} - IF({Done}, TODAY())", "(blank)"),
+        ("{Due} - IF({Done}, TODAY(), BLANK())", "(blank)"),
+        ("({Empty date} + 7) - TODAY()", "(blank)"),
+        ("{Due} - EDATE({Empty date}, 1)", "(blank)"),
+        // So what follows is empty too, never a wrong number or a date shown as days.
+        (r#""Days: " & ({Due} - {Empty date})"#, r#""Days: ""#),
+        ("IF({Due} - {Empty date} > 30, 1, 2)", "2"),
+        ("ISBLANK({Due} - {Empty date})", "TRUE"),
+        (r#"IFBLANK({Due} - {Empty date}, "open")"#, r#""open""#),
+        // An empty number of days is still zero days.
+        ("{Due} + {Empty number}", "2026-05-20"),
+        ("{Due} - {Empty number}", "2026-05-20"),
+        // Errors come first.
+        ("{Empty date} + 1 / 0", "#DIV/0!"),
+        ("1 / 0 - {Empty date}", "#DIV/0!"),
+        // Text and true/false count as numbers of days, like everywhere else.
+        (r#"{Due} + "7""#, "2026-05-27"),
+        ("{Due} + TRUE", "2026-05-21"),
+        (r#"{Due} - "20""#, "2026-04-30"),
+        (r#"{Due} + "soon""#, "#VALUE!"),
+    ]);
+    // The same for date-times: created is empty here.
+    let mut record = order();
+    record.cells.remove(&fid(CREATED));
+    check_in(
+        &[
+            ("NOW() - {Created}", "(blank)"),
+            ("{Created} - NOW()", "(blank)"),
+            ("{Created} + {Effort}", "(blank)"),
+            ("{Effort} + {Created}", "(blank)"),
+            ("{Created} - {Effort}", "(blank)"),
+            ("TO_HOURS(NOW() - {Created})", "(blank)"),
+            ("YEAR({Created})", "(blank)"),
+            (r#"TEXT({Created}, "hh:mm")"#, r#""""#),
+        ],
+        &record,
+        &UTC,
+    );
+    // An empty amount or duration is zero of its kind.
+    check(&[
+        ("{Empty money} / {Price}", "0"),
+        ("{Empty number} / {Effort}", "0"),
+        ("{Empty money} / ({Price} - {Price})", "#DIV/0!"),
+        ("{Empty number} / (DURATION(1) - DURATION(1))", "#DIV/0!"),
+    ]);
+}
+
+#[test]
 fn invalid_date_and_duration_arithmetic() {
     check(&[
         ("{Due} + 1.5", "#VALUE!"),
@@ -439,27 +499,27 @@ fn std_later_formulas_see_earlier_results() {
     let record = order();
     let formula = compile("{Qty} * 2");
     let mut computed = Computed::new();
-    assert_eq!(show(&evaluate_with(&formula, &record, &UTC, Some(&computed))), "6");
+    assert_eq!(show(&evaluate_with(&formula, &Orders, &record, &UTC, Some(&computed))), "6");
     // A computed value replaces the stored one …
     computed.insert(fid(QTY), Ok(num("10")));
-    assert_eq!(show(&evaluate_with(&formula, &record, &UTC, Some(&computed))), "20");
-    assert_eq!(show(&evaluate(&formula, &record, &UTC)), "6");
+    assert_eq!(show(&evaluate_with(&formula, &Orders, &record, &UTC, Some(&computed))), "20");
+    assert_eq!(show(&evaluate(&formula, &Orders, &record, &UTC)), "6");
     // … an empty result is empty …
     computed.insert(fid(QTY), Ok(Value::Null));
-    assert_eq!(show(&evaluate_with(&formula, &record, &UTC, Some(&computed))), "0");
+    assert_eq!(show(&evaluate_with(&formula, &Orders, &record, &UTC, Some(&computed))), "0");
     // … and an error flows on, where it can be caught.
     computed.insert(fid(QTY), Err(ErrorValue::Cycle));
-    assert_eq!(show(&evaluate_with(&formula, &record, &UTC, Some(&computed))), "#CYCLE!");
+    assert_eq!(show(&evaluate_with(&formula, &Orders, &record, &UTC, Some(&computed))), "#CYCLE!");
     let caught = compile("IFERROR({Qty}, 0) + 1");
-    assert_eq!(show(&evaluate_with(&caught, &record, &UTC, Some(&computed))), "1");
+    assert_eq!(show(&evaluate_with(&caught, &Orders, &record, &UTC, Some(&computed))), "1");
     // Fields that are not computed still come from the record.
     let other = compile("{Shipping}");
-    assert_eq!(show(&evaluate_with(&other, &record, &UTC, Some(&computed))), "4.5 USD");
+    assert_eq!(show(&evaluate_with(&other, &Orders, &record, &UTC, Some(&computed))), "4.5 USD");
     // A field the record does not have is empty.
     let empty = Rec::default();
-    assert_eq!(show(&evaluate(&compile("{Qty}"), &empty, &UTC)), "(blank)");
-    assert_eq!(show(&evaluate(&compile("{Lines}.{Qty}"), &empty, &UTC)), "[]");
-    assert_eq!(show(&evaluate(&compile("SUM({Lines}.{Qty})"), &empty, &UTC)), "0");
+    assert_eq!(show(&evaluate(&compile("{Qty}"), &Orders, &empty, &UTC)), "(blank)");
+    assert_eq!(show(&evaluate(&compile("{Lines}.{Qty}"), &Orders, &empty, &UTC)), "[]");
+    assert_eq!(show(&evaluate(&compile("SUM({Lines}.{Qty})"), &Orders, &empty, &UTC)), "0");
 }
 
 #[test]
@@ -494,7 +554,7 @@ fn std_cell_values_from_other_kinds_of_fields() {
 }
 
 fn to(source: &str, target: DataType) -> Result<Value, ErrorValue> {
-    evaluate_to(&compile(source), &order(), &UTC, None, target)
+    evaluate_to(&compile(source), &Orders, &order(), &UTC, None, target)
 }
 
 #[test]
@@ -536,6 +596,19 @@ fn std_results_become_cell_values() {
     assert_eq!(to("{Price} / 2", DataType::Text), Ok(Value::Text("10.00 USD".into())));
     assert_eq!(to("{Title}", DataType::LongText), Ok(Value::LongText("Spring order".into())));
     assert_eq!(to(r#""  ""#, DataType::Text), Ok(Value::Null));
+    // Nothing but empty amounts leaves no amount (there is no currency to state it in);
+    // nothing but empty durations is a duration of zero.
+    assert_eq!(to("{Empty money} * 2", DataType::Money), Ok(Value::Null));
+    assert_eq!(to("{Empty money} + {Empty money}", DataType::Money), Ok(Value::Null));
+    assert_eq!(to("-{Empty money}", DataType::Money), Ok(Value::Null));
+    assert_eq!(to("SUM({Empty money})", DataType::Money), Ok(Value::Null));
+    assert_eq!(to("ROUND({Empty money}, 2)", DataType::Money), Ok(Value::Null));
+    assert_eq!(
+        to("{Empty number} * 2", DataType::Duration),
+        Ok(Value::Duration(DurationMs::from_millis(0)))
+    );
+    assert_eq!(to("{Empty date} + 7", DataType::Date), Ok(Value::Null));
+    assert_eq!(to("{Due} - {Empty date}", DataType::Number), Ok(Value::Null));
     // Empty stays empty, for every kind of field.
     for target in DataType::ALL.iter().copied() {
         assert_eq!(to("BLANK()", target), Ok(Value::Null), "{target:?}");
@@ -551,6 +624,7 @@ fn invalid_results_of_the_wrong_kind() {
     assert_eq!(to("{Due}", DataType::Number), wrong);
     assert_eq!(to("{Qty}", DataType::Bool), wrong);
     assert_eq!(to("{Qty}", DataType::Money), wrong);
+    assert_eq!(to("{Qty} * 0.5", DataType::Duration), wrong);
     assert_eq!(to("{Price}", DataType::Number), wrong);
     assert_eq!(to("{Price}", DataType::Percent), wrong);
     assert_eq!(to("{Due}", DataType::DateTime), wrong);
@@ -663,24 +737,24 @@ fn anomalous_hand_built_trees_cannot_break_evaluation() {
         (Function::Number(NumberFn::Sum), 0),
     ] {
         let tree = Expr::Call { function, args: vec![Expr::Bool(true); count] };
-        assert_eq!(show(&evaluate(&tree, &record, &UTC)), "#VALUE!", "{function:?} with {count}");
+        assert_eq!(show(&evaluate(&tree, &Orders, &record, &UTC)), "#VALUE!", "{function:?} with {count}");
     }
     // Deeper than any parsed formula.
     let mut deep = Expr::Field(fid(QTY));
     for _ in 0..100 {
         deep = Expr::Unary { op: UnaryOp::Negate, operand: Box::new(deep) };
     }
-    assert_eq!(show(&evaluate(&deep, &record, &UTC)), "#LIMIT!");
-    assert_eq!(evaluate_to(&deep, &record, &UTC, None, DataType::Number), Err(ErrorValue::Limit));
+    assert_eq!(show(&evaluate(&deep, &Orders, &record, &UTC)), "#LIMIT!");
+    assert_eq!(evaluate_to(&deep, &Orders, &record, &UTC, None, DataType::Number), Err(ErrorValue::Limit));
     // A field that does not exist is empty rather than a crash.
     let ghost = Expr::Binary {
         op: BinaryOp::Add,
         left: Box::new(Expr::Field(fid(999))),
         right: Box::new(Expr::Number(dec("1"))),
     };
-    assert_eq!(show(&evaluate(&ghost, &record, &UTC)), "1");
+    assert_eq!(show(&evaluate(&ghost, &Orders, &record, &UTC)), "1");
     let ghost_link = Expr::Through { link: fid(998), field: fid(999) };
-    assert_eq!(show(&evaluate(&ghost_link, &record, &UTC)), "[]");
+    assert_eq!(show(&evaluate(&ghost_link, &Orders, &record, &UTC)), "[]");
 }
 
 /// A record with `count` linked lines whose quantities are 1, 2, 3, ….
