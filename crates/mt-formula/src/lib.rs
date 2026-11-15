@@ -5,6 +5,8 @@
 //! * [`value`] — the values formulas calculate with and the rules for combining them.
 //! * [`types`] — the type checker: definition-time errors and the type of the result.
 //! * [`eval`] — the bounded evaluator.
+//! * [`deps`] — what a formula reads, cycle detection, evaluation order and what to
+//!   recompute after a change.
 //! * [`schema`] — what a formula needs to know about the tables it refers to.
 //! * [`error`] — problems with a formula's text, and the error values a formula can
 //!   evaluate to.
@@ -15,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ast;
+pub mod deps;
 pub mod error;
 pub mod eval;
 mod functions;
@@ -25,6 +28,9 @@ pub mod value;
 
 pub use ast::{
     BinaryOp, DateFn, Expr, Function, ListFn, LogicFn, LookupFn, Names, NumberFn, TextFn, UnaryOp,
+};
+pub use deps::{
+    analyse, dependencies, Affected, Analysis, ComputedField, Dependencies, Graph, Remote, Warning,
 };
 pub use error::{ErrorValue, FormulaError};
 pub use eval::{evaluate, evaluate_to, evaluate_with, Computed, Env, Record};
