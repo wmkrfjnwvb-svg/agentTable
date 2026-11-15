@@ -332,6 +332,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mt-formula"
+version = "0.1.0"
+dependencies = [
+ "mt-core",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "mt-query"
 version = "0.1.0"
 dependencies = [
