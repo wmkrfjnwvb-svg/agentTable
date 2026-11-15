@@ -148,7 +148,7 @@ fn issue(field: &FieldDef, code: IssueCode, message: String) -> ValidationIssue 
 
 /// Whether the field accepts a value written by a person, an import or an integration.
 /// Returns the reason if it does not: the field is disabled or deprecated, or its values are
-/// generated (auto-numbering).
+/// generated (numbered automatically, calculated, or maintained by the system).
 #[must_use]
 pub fn check_writable(field: &FieldDef) -> Option<ValidationIssue> {
     if !field.status.accepts_writes() {
@@ -162,7 +162,11 @@ pub fn check_writable(field: &FieldDef) -> Option<ValidationIssue> {
         return Some(issue(
             field,
             IssueCode::Generated,
-            format!("`{}` is numbered automatically", field.name),
+            format!(
+                "`{}` is {}",
+                field.name,
+                field.value_source().unwrap_or("generated")
+            ),
         ));
     }
     None

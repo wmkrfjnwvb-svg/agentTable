@@ -9,7 +9,8 @@
 //! | [`id`] | typed, prefixed, time-ordered IDs |
 //! | [`decimal`], [`money`], [`time`] | exact numbers, currency amounts, dates, instants, durations |
 //! | [`value`] | the cell value model and its canonical serde form |
-//! | [`field`] | field definitions: type, widget, options, format, validation, governance |
+//! | [`field`] | field definitions: type, widget, options, format, validation, governance, computed and system facets |
+//! | [`fieldtype`] | the field picker: built-in field types in eight groups, custom types, the field library |
 //! | [`validate`] | checking a value against a field definition |
 //! | [`coerce`] | reading user input |
 //! | [`convert`] | converting values between data types |
@@ -28,6 +29,7 @@ pub mod convert;
 pub mod decimal;
 pub mod error;
 pub mod field;
+pub mod fieldtype;
 pub mod format;
 pub mod id;
 pub mod limits;

@@ -122,7 +122,7 @@ A lookup field is `{Link}.{Field}`; a roll-up is an aggregate over it (`SUM`, `C
 | `tests/properties.rs` | Printing keeps the meaning; evaluation is total and repeatable; the checker tells the truth (random trees, and 1 500 formulas well typed by construction); storage round trip; the parser survives any text; order and recompute against a model; thread-safety | 9 |
 
 By category: standard 41, edge 10, invalid 19, anomalous 3, properties 8, concurrency 1;
-cross-platform is the WebAssembly build. Line coverage 99.83 % (the one uncovered line is a
+cross-platform is the WebAssembly build. Line coverage 99.8 % (the one uncovered line of the library is a
 defensive arm that exhaustive matching requires and no input reaches).
 
 ```bash
