@@ -116,9 +116,11 @@ impl Machine<'_> {
         let mut items = Vec::with_capacity(values.len());
         for value in &values {
             // A multi-value field of a linked record contributes its items.
-            match Val::from_value(value) {
-                Val::List(inner) => items.extend(inner),
-                single => items.push(single),
+            let converted = Val::from_value(value);
+            if let Val::List(inner) = converted {
+                items.extend(inner);
+            } else {
+                items.push(converted);
             }
             if items.len() > MAX_LIST_ITEMS {
                 return Val::Error(ErrorValue::Limit);
@@ -230,10 +232,11 @@ impl Machine<'_> {
             self.current = outer;
             return Ok(flags);
         }
-        let criterion = match self.eval(criterion) {
-            Val::Error(error) => return Err(error),
-            value => lists::Criterion::new(value),
-        };
+        let value = self.eval(criterion);
+        if let Some(error) = value.error() {
+            return Err(error);
+        }
+        let criterion = lists::Criterion::new(value);
         items.iter().map(|item| criterion.accepts(item)).collect()
     }
 

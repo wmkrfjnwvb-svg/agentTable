@@ -3,6 +3,7 @@
 //! * [`parser`] — text to tree, with positions in error messages.
 //! * [`ast`] — the tree, the function table, and printing with current field names.
 //! * [`value`] — the values formulas calculate with and the rules for combining them.
+//! * [`types`] — the type checker: definition-time errors and the type of the result.
 //! * [`eval`] — the bounded evaluator.
 //! * [`schema`] — what a formula needs to know about the tables it refers to.
 //! * [`error`] — problems with a formula's text, and the error values a formula can
@@ -19,6 +20,7 @@ pub mod eval;
 mod functions;
 pub mod parser;
 pub mod schema;
+pub mod types;
 pub mod value;
 
 pub use ast::{
@@ -28,4 +30,5 @@ pub use error::{ErrorValue, FormulaError};
 pub use eval::{evaluate, evaluate_to, evaluate_with, Computed, Env, Record};
 pub use parser::parse;
 pub use schema::Schema;
+pub use types::{check, check_for_field, Type};
 pub use value::{Comparison, Val};

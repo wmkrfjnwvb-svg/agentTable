@@ -14,9 +14,12 @@ pub(crate) fn value(values: &[Val], index: usize) -> &Val {
 
 /// Every value of the arguments, with lists expanded.
 pub(crate) fn flatten(values: &[Val]) -> impl Iterator<Item = &Val> {
-    values.iter().flat_map(|value| match value {
-        Val::List(items) => items.iter().collect::<Vec<_>>(),
-        single => vec![single],
+    values.iter().flat_map(|value| {
+        if let Val::List(items) = value {
+            items.iter().collect::<Vec<_>>()
+        } else {
+            vec![value]
+        }
     })
 }
 
@@ -215,9 +218,10 @@ fn on_number(
     value: &Val,
     calculate: impl Fn(Decimal) -> Result<Decimal, ErrorValue>,
 ) -> Result<Val, ErrorValue> {
-    match value {
-        Val::Money(amount, currency) => Ok(Val::Money(calculate(*amount)?, *currency)),
-        other => Ok(Val::Number(calculate(other.number()?)?)),
+    if let Val::Money(amount, currency) = value {
+        Ok(Val::Money(calculate(*amount)?, *currency))
+    } else {
+        Ok(Val::Number(calculate(value.number()?)?))
     }
 }
 
@@ -315,9 +319,10 @@ pub(crate) fn call(function: NumberFn, values: &[Val]) -> Result<Val, ErrorValue
         NumberFn::CountA => Ok(count(flatten(values).filter(|v| !v.is_blank()).count())),
         NumberFn::Abs => on_number(value(values, 0), |x| Ok(x.abs())),
         NumberFn::Sign => {
-            let x = match value(values, 0) {
-                Val::Money(amount, _) => *amount,
-                other => other.number()?,
+            let x = if let Val::Money(amount, _) = value(values, 0) {
+                *amount
+            } else {
+                value(values, 0).number()?
             };
             Ok(Val::Number(if x.is_zero() {
                 Decimal::ZERO

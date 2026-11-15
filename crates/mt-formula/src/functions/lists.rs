@@ -89,10 +89,12 @@ impl Criterion {
 
 /// The items of an evaluated list argument.
 fn items(value: &Val) -> Vec<Val> {
-    match value {
-        Val::List(items) => items.clone(),
-        Val::Blank => Vec::new(),
-        single => vec![single.clone()],
+    if let Val::List(items) = value {
+        items.clone()
+    } else if value.is_blank() {
+        Vec::new()
+    } else {
+        vec![value.clone()]
     }
 }
 
@@ -162,13 +164,13 @@ pub(crate) fn lookup(function: LookupFn, values: &[Val], env: &dyn Env) -> Resul
                 | Val::Money(..)
                 | Val::List(_) => Err(ErrorValue::Value),
             };
-            match subject {
-                Val::List(list) => list
-                    .iter()
+            if let Val::List(list) = subject {
+                list.iter()
                     .map(one)
                     .collect::<Result<Vec<_>, _>>()
-                    .map(Val::List),
-                single => one(single),
+                    .map(Val::List)
+            } else {
+                one(subject)
             }
         };
     match function {

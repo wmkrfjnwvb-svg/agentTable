@@ -137,10 +137,11 @@ pub(crate) fn call(function: DateFn, values: &[Val], env: &dyn Env) -> Result<Va
         DateFn::Month => Ok(number(i64::from(day(arg(0), env)?.month()))),
         DateFn::Day => Ok(number(i64::from(day(arg(0), env)?.day()))),
         DateFn::Hour | DateFn::Minute => {
-            let millis = match arg(0) {
-                Val::DateTime(at) => since_midnight(*at, env),
+            let millis = if let Val::DateTime(at) = arg(0) {
+                since_midnight(*at, env)
+            } else {
                 // A plain date has no time of day.
-                other => day(other, env).map(|_| 0)?,
+                day(arg(0), env).map(|_| 0)?
             };
             let hours = millis.checked_div(3_600_000).unwrap_or(0);
             let minutes = millis
@@ -210,18 +211,17 @@ pub(crate) fn call(function: DateFn, values: &[Val], env: &dyn Env) -> Result<Va
         DateFn::DateAdd => {
             let count = arg(1).integer()?;
             let unit = arg(2).text(&|item| env.label(item))?;
-            match arg(0) {
+            if let Val::DateTime(at) = arg(0) {
                 // A date-time keeps its time of day in the local time zone.
-                Val::DateTime(at) => {
-                    let moved = shift(day_of(*at, env), count, &unit)?;
-                    env.start_of_day(moved)
-                        .millis()
-                        .checked_add(since_midnight(*at, env))
-                        .and_then(|millis| Timestamp::from_millis(millis).ok())
-                        .map(Val::DateTime)
-                        .ok_or(ErrorValue::Num)
-                }
-                other => shift(day(other, env)?, count, &unit).map(Val::Date),
+                let moved = shift(day_of(*at, env), count, &unit)?;
+                env.start_of_day(moved)
+                    .millis()
+                    .checked_add(since_midnight(*at, env))
+                    .and_then(|millis| Timestamp::from_millis(millis).ok())
+                    .map(Val::DateTime)
+                    .ok_or(ErrorValue::Num)
+            } else {
+                shift(day(arg(0), env)?, count, &unit).map(Val::Date)
             }
         }
         DateFn::EDate => add_months(day(arg(0), env)?, arg(1).integer()?).map(Val::Date),
