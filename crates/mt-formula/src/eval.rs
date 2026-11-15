@@ -11,6 +11,8 @@
 //! `IF`, `IFS`, `SWITCH`, `AND`, `OR`, `IFERROR` and `IFBLANK` evaluate only the arguments
 //! they need, so `IF({n} = 0, 0, {total} / {n})` never divides by zero.
 //!
+//! A reference to a field that no longer exists evaluates to `#REF!`.
+//!
 //! **Empty dates.** An empty value counts as zero in arithmetic, but an empty *date* is not
 //! day zero: `{Due} - {Start}` and `{Start} + 14` are empty while there is no start, and
 //! date functions return nothing for a missing date. Whether an empty operand is a date is
@@ -117,10 +119,17 @@ impl Machine<'_> {
                 Err(error) => Val::Error(*error),
             };
         }
+        // A field that was deleted after the formula was written.
+        if self.schema.field_type(field).is_none() {
+            return Val::Error(ErrorValue::Ref);
+        }
         self.record.value(field).map_or(Val::Blank, Val::from_value)
     }
 
     fn through(&self, link: FieldId, field: FieldId) -> Val {
+        if self.schema.linked_field_type(link, field).is_none() {
+            return Val::Error(ErrorValue::Ref);
+        }
         let values = self.record.linked_values(link, field);
         let mut items = Vec::with_capacity(values.len());
         for value in &values {

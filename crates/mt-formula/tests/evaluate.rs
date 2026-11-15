@@ -746,15 +746,22 @@ fn anomalous_hand_built_trees_cannot_break_evaluation() {
     }
     assert_eq!(show(&evaluate(&deep, &Orders, &record, &UTC)), "#LIMIT!");
     assert_eq!(evaluate_to(&deep, &Orders, &record, &UTC, None, DataType::Number), Err(ErrorValue::Limit));
-    // A field that does not exist is empty rather than a crash.
+    // A field that no longer exists is `#REF!`, which can be caught like any error.
     let ghost = Expr::Binary {
         op: BinaryOp::Add,
         left: Box::new(Expr::Field(fid(999))),
         right: Box::new(Expr::Number(dec("1"))),
     };
-    assert_eq!(show(&evaluate(&ghost, &Orders, &record, &UTC)), "1");
+    assert_eq!(show(&evaluate(&ghost, &Orders, &record, &UTC)), "#REF!");
     let ghost_link = Expr::Through { link: fid(998), field: fid(999) };
-    assert_eq!(show(&evaluate(&ghost_link, &Orders, &record, &UTC)), "[]");
+    assert_eq!(show(&evaluate(&ghost_link, &Orders, &record, &UTC)), "#REF!");
+    let ghost_linked_field = Expr::Through { link: fid(LINES), field: fid(999) };
+    assert_eq!(show(&evaluate(&ghost_linked_field, &Orders, &record, &UTC)), "#REF!");
+    let caught = Expr::Call {
+        function: Function::Logic(LogicFn::IfError),
+        args: vec![ghost, Expr::Number(dec("0"))],
+    };
+    assert_eq!(show(&evaluate(&caught, &Orders, &record, &UTC)), "0");
 }
 
 /// A record with `count` linked lines whose quantities are 1, 2, 3, ….
