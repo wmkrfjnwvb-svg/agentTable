@@ -55,8 +55,10 @@ const L_ORDER: u128 = 43; // link → orders
 const L_AMOUNT: u128 = 44; // computed
 
 type Field = (u128, &'static str, DataType);
+/// A table: its id, its fields, and where its link fields lead.
+type Table = (u128, &'static [Field], &'static [(u128, u128)]);
 
-const TABLES: &[(u128, &[Field], &[(u128, u128)])] = &[
+const TABLES: &[Table] = &[
     (
         CUSTOMERS,
         &[
@@ -104,12 +106,18 @@ fn table(id: u128) -> TableId {
 }
 
 fn fields_of(table: u128) -> &'static [Field] {
-    TABLES.iter().find(|(id, _, _)| *id == table).map_or(&[], |(_, fields, _)| fields)
+    TABLES
+        .iter()
+        .find(|(id, _, _)| *id == table)
+        .map_or(&[], |(_, fields, _)| fields)
 }
 
 fn target_of(table: u128, link: FieldId) -> Option<u128> {
     let (_, _, links) = TABLES.iter().find(|(id, _, _)| *id == table)?;
-    links.iter().find(|(field, _)| fid(*field) == link).map(|(_, target)| *target)
+    links
+        .iter()
+        .find(|(field, _)| fid(*field) == link)
+        .map(|(_, target)| *target)
 }
 
 /// One table of the base as the formulas of that table see it.
@@ -117,11 +125,17 @@ struct In(u128);
 
 impl Schema for In {
     fn field_by_name(&self, name: &str) -> Option<FieldId> {
-        fields_of(self.0).iter().find(|(_, n, _)| n.eq_ignore_ascii_case(name)).map(|(id, _, _)| fid(*id))
+        fields_of(self.0)
+            .iter()
+            .find(|(_, n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(id, _, _)| fid(*id))
     }
 
     fn field_type(&self, field: FieldId) -> Option<DataType> {
-        fields_of(self.0).iter().find(|(id, _, _)| fid(*id) == field).map(|(_, _, t)| *t)
+        fields_of(self.0)
+            .iter()
+            .find(|(id, _, _)| fid(*id) == field)
+            .map(|(_, _, t)| *t)
     }
 
     fn linked_field_by_name(&self, link: FieldId, name: &str) -> Option<FieldId> {
@@ -138,7 +152,11 @@ fn formula(table_id: u128, source: &str) -> Expr {
 }
 
 fn computed(table_id: u128, field: u128, source: &str) -> ComputedField {
-    ComputedField { table: table(table_id), field: fid(field), expr: formula(table_id, source) }
+    ComputedField {
+        table: table(table_id),
+        field: fid(field),
+        expr: formula(table_id, source),
+    }
 }
 
 fn link_target(from: TableId, link: FieldId) -> Option<TableId> {
@@ -160,13 +178,21 @@ fn name(of: TableId, field: FieldId) -> String {
 /// The computed fields of the base.
 fn definitions() -> Vec<ComputedField> {
     vec![
-        computed(CUSTOMERS, C_TIER, r#"IF({Revenue} > PARAM("tier.gold"), "gold", "standard")"#),
+        computed(
+            CUSTOMERS,
+            C_TIER,
+            r#"IF({Revenue} > PARAM("tier.gold"), "gold", "standard")"#,
+        ),
         computed(CUSTOMERS, C_REVENUE, "SUM({Orders}.{Total})"),
         computed(ORDERS, O_TOTAL, "{Subtotal} + {Tax} + {Shipping}"),
         computed(ORDERS, O_TAX, r#"{Subtotal} * PARAM("tax.rate")"#),
         computed(ORDERS, O_SUBTOTAL, "SUM({Lines}.{Amount})"),
         computed(ORDERS, O_LATE, "AND(NOT({Done}), {Due} < TODAY())"),
-        computed(ORDERS, O_SUMMARY, r#"{Title} & ": " & COUNTA({Lines}) & " line(s)""#),
+        computed(
+            ORDERS,
+            O_SUMMARY,
+            r#"{Title} & ": " & COUNTA({Lines}) & " line(s)""#,
+        ),
         computed(ORDERS, O_AVERAGE, "{Subtotal} / {Count}"),
         computed(ORDERS, O_SAFE, "IFERROR({Average}, {Subtotal})"),
         computed(LINES, L_AMOUNT, "{Price} * {Qty}"),
@@ -186,7 +212,10 @@ fn set(fields: &[u128]) -> BTreeSet<FieldId> {
 }
 
 fn position(order: &[(TableId, FieldId)], table_id: u128, field: u128) -> usize {
-    order.iter().position(|key| *key == (table(table_id), fid(field))).unwrap()
+    order
+        .iter()
+        .position(|key| *key == (table(table_id), fid(field)))
+        .unwrap()
 }
 
 #[test]
@@ -194,19 +223,35 @@ fn std_what_a_formula_reads() {
     let found = dependencies(&formula(ORDERS, "{Subtotal} + {Tax} + {Shipping}"));
     assert_eq!(
         found,
-        Dependencies { fields: set(&[O_SUBTOTAL, O_TAX, O_SHIPPING]), ..Dependencies::default() }
+        Dependencies {
+            fields: set(&[O_SUBTOTAL, O_TAX, O_SHIPPING]),
+            ..Dependencies::default()
+        }
     );
     // Going through a link reads the link field itself and the linked field.
-    let found = dependencies(&formula(ORDERS, "SUM({Lines}.{Amount}) + COUNTA({Lines}.{Qty})"));
+    let found = dependencies(&formula(
+        ORDERS,
+        "SUM({Lines}.{Amount}) + COUNTA({Lines}.{Qty})",
+    ));
     assert_eq!(found.fields, set(&[O_LINES]));
     assert_eq!(
         found.through,
-        [(fid(O_LINES), fid(L_AMOUNT)), (fid(O_LINES), fid(L_QTY))].into_iter().collect()
+        [(fid(O_LINES), fid(L_AMOUNT)), (fid(O_LINES), fid(L_QTY))]
+            .into_iter()
+            .collect()
     );
     assert!(!found.volatile && !found.any_param && found.params.is_empty());
     // Parameters by name; a computed key means "any parameter".
-    let found = dependencies(&formula(ORDERS, r#"PARAM("tax.rate") + PARAM("tax.rate") + PARAM("x")"#));
-    assert_eq!(found.params, ["tax.rate".to_owned(), "x".to_owned()].into_iter().collect());
+    let found = dependencies(&formula(
+        ORDERS,
+        r#"PARAM("tax.rate") + PARAM("tax.rate") + PARAM("x")"#,
+    ));
+    assert_eq!(
+        found.params,
+        ["tax.rate".to_owned(), "x".to_owned()]
+            .into_iter()
+            .collect()
+    );
     assert!(!found.any_param);
     assert!(dependencies(&formula(ORDERS, r#"PARAM("tax." & {Title})"#)).any_param);
     // The clock.
@@ -220,9 +265,15 @@ fn std_what_a_formula_reads() {
     ));
     assert_eq!(found.fields, set(&[O_LINES, O_COUNT, O_DONE, O_SHIPPING]));
     // Constants read nothing.
-    assert_eq!(dependencies(&formula(ORDERS, r#"1 + LEN("abc")"#)), Dependencies::default());
+    assert_eq!(
+        dependencies(&formula(ORDERS, r#"1 + LEN("abc")"#)),
+        Dependencies::default()
+    );
     // What is read survives storage.
-    let found = dependencies(&formula(ORDERS, r#"SUM({Lines}.{Amount}) * PARAM("tax.rate")"#));
+    let found = dependencies(&formula(
+        ORDERS,
+        r#"SUM({Lines}.{Amount}) * PARAM("tax.rate")"#,
+    ));
     let json = serde_json::to_string(&found).unwrap();
     assert_eq!(serde_json::from_str::<Dependencies>(&json).unwrap(), found);
 }
@@ -238,7 +289,7 @@ fn std_warnings_for_the_person_writing_a_formula() {
         [Warning::VolatileOverLinks]
     );
     // Each walk through a link reads every linked record.
-    let five = vec!["SUM({Lines}.{Qty})"; MANY_LINKED_LOOKUPS].join(" + ");
+    let five = ["SUM({Lines}.{Qty})"; MANY_LINKED_LOOKUPS].join(" + ");
     assert_eq!(warnings(&five), []);
     let six = format!("{five} + MAX({{Lines}}.{{Qty}})");
     assert_eq!(warnings(&six), [Warning::ManyLinkedLookups { count: 6 }]);
@@ -252,9 +303,14 @@ fn std_warnings_for_the_person_writing_a_formula() {
         [Warning::NestedListCondition]
     );
     assert_eq!(warnings("SUMIF({Lines}.{Qty}, CurrentValue > {Count})"), []);
-    assert_eq!(warnings(r#"SUMIF({Lines}.{Qty}, ">1", {Lines}.{Amount})"#), []);
     assert_eq!(
-        warnings(&format!("{six} + COUNTIF({{Lines}}.{{Qty}}, FIRST({{Lines}}.{{Qty}})) + HOUR(NOW())")),
+        warnings(r#"SUMIF({Lines}.{Qty}, ">1", {Lines}.{Amount})"#),
+        []
+    );
+    assert_eq!(
+        warnings(&format!(
+            "{six} + COUNTIF({{Lines}}.{{Qty}}, FIRST({{Lines}}.{{Qty}})) + HOUR(NOW())"
+        )),
         [
             Warning::VolatileOverLinks,
             Warning::ManyLinkedLookups { count: 8 },
@@ -268,10 +324,16 @@ fn std_warnings_for_the_person_writing_a_formula() {
     assert_eq!(analysis.dependencies.fields, set(&[O_DONE, O_DUE]));
     assert_eq!(analysis.warnings, [Warning::Volatile]);
     let json = serde_json::to_value(&analysis).unwrap();
-    assert_eq!(json["warnings"], serde_json::json!([{"warning": "volatile"}]));
+    assert_eq!(
+        json["warnings"],
+        serde_json::json!([{"warning": "volatile"}])
+    );
     assert_eq!(serde_json::from_value::<Analysis>(json).unwrap(), analysis);
     let many = serde_json::to_value(Warning::ManyLinkedLookups { count: 6 }).unwrap();
-    assert_eq!(many, serde_json::json!({"warning": "many_linked_lookups", "count": 6}));
+    assert_eq!(
+        many,
+        serde_json::json!({"warning": "many_linked_lookups", "count": 6})
+    );
 }
 
 #[test]
@@ -283,7 +345,10 @@ fn std_every_formula_comes_after_what_it_reads() {
     let order = graph.order();
     assert_eq!(order.len(), 10);
     let before = |a: (u128, u128), b: (u128, u128)| {
-        assert!(position(order, a.0, a.1) < position(order, b.0, b.1), "{a:?} before {b:?}");
+        assert!(
+            position(order, a.0, a.1) < position(order, b.0, b.1),
+            "{a:?} before {b:?}"
+        );
     };
     // Within a record …
     before((ORDERS, O_SUBTOTAL), (ORDERS, O_TAX));
@@ -320,7 +385,9 @@ fn std_every_formula_comes_after_what_it_reads() {
     assert_eq!(graph.expr(table(LINES), fid(L_QTY)), None);
     assert_eq!(graph.expr(table(ORDERS), fid(L_AMOUNT)), None);
     assert_eq!(
-        graph.dependencies_of(table(ORDERS), fid(O_TAX)).map(|deps| deps.params.len()),
+        graph
+            .dependencies_of(table(ORDERS), fid(O_TAX))
+            .map(|deps| deps.params.len()),
         Some(1)
     );
     assert_eq!(graph.dependencies_of(table(ORDERS), fid(O_TITLE)), None);
@@ -336,7 +403,10 @@ fn cycle(fields: Vec<ComputedField>) -> String {
 #[test]
 fn invalid_circular_definitions() {
     // A field that reads itself.
-    assert_eq!(cycle(vec![computed(ORDERS, O_TOTAL, "{Total} + 1")]), "Total → Total");
+    assert_eq!(
+        cycle(vec![computed(ORDERS, O_TOTAL, "{Total} + 1")]),
+        "Total → Total"
+    );
     // Two fields that read each other.
     assert_eq!(
         cycle(vec![
@@ -366,7 +436,11 @@ fn invalid_circular_definitions() {
     );
     // A circle inside a condition is still a circle.
     assert_eq!(
-        cycle(vec![computed(ORDERS, O_LATE, "IF({Done}, FALSE, NOT({Late}))")]),
+        cycle(vec![computed(
+            ORDERS,
+            O_LATE,
+            "IF({Done}, FALSE, NOT({Late}))"
+        )]),
         "Late → Late"
     );
     // Reading the same field twice, or a diamond, is not a circle.
@@ -385,7 +459,11 @@ fn invalid_circular_definitions() {
     Graph::build(
         vec![
             computed(ORDERS, O_SUBTOTAL, "SUM({Lines}.{Amount})"),
-            computed(LINES, L_AMOUNT, r#"{Price} * {Qty} + SUM({Order}.{Shipping})"#),
+            computed(
+                LINES,
+                L_AMOUNT,
+                r#"{Price} * {Qty} + SUM({Order}.{Shipping})"#,
+            ),
         ],
         &link_target,
         &name,
@@ -405,11 +483,16 @@ fn invalid_definitions() {
     let through = ComputedField {
         table: table(ORDERS),
         field: fid(O_TAX),
-        expr: Expr::Through { link: fid(O_TITLE), field: fid(L_QTY) },
+        expr: Expr::Through {
+            link: fid(O_TITLE),
+            field: fid(L_QTY),
+        },
     };
     assert_eq!(
         Graph::build(vec![through], &link_target, &name),
-        Err(FormulaError::Type("`Tax` goes through `Title`, which is not a link field".into()))
+        Err(FormulaError::Type(
+            "`Tax` goes through `Title`, which is not a link field".into()
+        ))
     );
     // Too many computed fields.
     let many = |count: usize| -> Vec<ComputedField> {
@@ -425,13 +508,22 @@ fn invalid_definitions() {
         Graph::build(many(MAX_COMPUTED_FIELDS + 1), &link_target, &name),
         Err(FormulaError::Limit("more than 10,000 computed fields"))
     );
-    assert_eq!(Graph::build(many(MAX_COMPUTED_FIELDS), &link_target, &name).unwrap().len(), 10_000);
+    assert_eq!(
+        Graph::build(many(MAX_COMPUTED_FIELDS), &link_target, &name)
+            .unwrap()
+            .len(),
+        10_000
+    );
     // A long chain is ordered without deep recursion.
     let chain: Vec<ComputedField> = (0..5_000_u128)
         .map(|n| ComputedField {
             table: table(ORDERS),
             field: fid(1_000 + n),
-            expr: if n == 0 { Expr::Bool(true) } else { Expr::Field(fid(999 + n)) },
+            expr: if n == 0 {
+                Expr::Bool(true)
+            } else {
+                Expr::Field(fid(999 + n))
+            },
         })
         .rev()
         .collect();
@@ -445,7 +537,8 @@ fn invalid_definitions() {
 #[test]
 fn std_what_a_change_affects() {
     let graph = graph();
-    let affected = |table_id: u128, changed: &[u128]| graph.affected(table(table_id), &set(changed));
+    let affected =
+        |table_id: u128, changed: &[u128]| graph.affected(table(table_id), &set(changed));
     let remote = |table_id: u128, link: u128, fields: &[u128]| Remote {
         table: table(table_id),
         link: fid(link),
@@ -457,16 +550,26 @@ fn std_what_a_change_affects() {
         affected(LINES, &[L_QTY]),
         Affected {
             local: ids(&[L_AMOUNT]),
-            remote: vec![remote(ORDERS, O_LINES, &[O_SUBTOTAL, O_TAX, O_TOTAL, O_AVERAGE, O_SAFE])],
+            remote: vec![remote(
+                ORDERS,
+                O_LINES,
+                &[O_SUBTOTAL, O_TAX, O_TOTAL, O_AVERAGE, O_SAFE]
+            )],
         }
     );
     // Following the chain: those order fields changed, which customers read.
     let next = affected(ORDERS, &[O_SUBTOTAL, O_TAX, O_TOTAL, O_AVERAGE, O_SAFE]);
     assert_eq!(
         next,
-        Affected { local: vec![], remote: vec![remote(CUSTOMERS, C_ORDERS, &[C_REVENUE, C_TIER])] }
+        Affected {
+            local: vec![],
+            remote: vec![remote(CUSTOMERS, C_ORDERS, &[C_REVENUE, C_TIER])]
+        }
     );
-    assert_eq!(affected(CUSTOMERS, &[C_REVENUE, C_TIER]), Affected::default());
+    assert_eq!(
+        affected(CUSTOMERS, &[C_REVENUE, C_TIER]),
+        Affected::default()
+    );
 
     // An order's shipping: only the total, and the customer's revenue.
     assert_eq!(
@@ -481,13 +584,31 @@ fn std_what_a_change_affects() {
     assert_eq!(lines_changed.local.len(), 6);
     assert!(lines_changed.local.contains(&fid(O_SUMMARY)));
     assert!(!lines_changed.local.contains(&fid(O_LATE)));
-    assert_eq!(lines_changed.remote, vec![remote(CUSTOMERS, C_ORDERS, &[C_REVENUE, C_TIER])]);
+    assert_eq!(
+        lines_changed.remote,
+        vec![remote(CUSTOMERS, C_ORDERS, &[C_REVENUE, C_TIER])]
+    );
     // Local changes that nobody else reads.
-    assert_eq!(affected(ORDERS, &[O_TITLE]), Affected { local: ids(&[O_SUMMARY]), remote: vec![] });
-    assert_eq!(affected(ORDERS, &[O_DUE, O_DONE]), Affected { local: ids(&[O_LATE]), remote: vec![] });
+    assert_eq!(
+        affected(ORDERS, &[O_TITLE]),
+        Affected {
+            local: ids(&[O_SUMMARY]),
+            remote: vec![]
+        }
+    );
+    assert_eq!(
+        affected(ORDERS, &[O_DUE, O_DONE]),
+        Affected {
+            local: ids(&[O_LATE]),
+            remote: vec![]
+        }
+    );
     assert_eq!(
         affected(ORDERS, &[O_COUNT]),
-        Affected { local: ids(&[O_AVERAGE, O_SAFE]), remote: vec![] }
+        Affected {
+            local: ids(&[O_AVERAGE, O_SAFE]),
+            remote: vec![]
+        }
     );
     // A line's name is read by nothing; a customer's name neither.
     assert_eq!(affected(LINES, &[L_NAME]), Affected::default());
@@ -497,14 +618,22 @@ fn std_what_a_change_affects() {
     // New links from a customer to orders: the customer's own fields.
     assert_eq!(
         affected(CUSTOMERS, &[C_ORDERS]),
-        Affected { local: ids(&[C_REVENUE, C_TIER]), remote: vec![] }
+        Affected {
+            local: ids(&[C_REVENUE, C_TIER]),
+            remote: vec![]
+        }
     );
     // The local fields come in evaluation order.
     let local = affected(ORDERS, &[O_LINES, O_COUNT, O_TITLE]).local;
     let order = graph.order_in(table(ORDERS));
-    let positions: Vec<usize> =
-        local.iter().map(|f| order.iter().position(|o| o == f).unwrap()).collect();
-    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{local:?}");
+    let positions: Vec<usize> = local
+        .iter()
+        .map(|f| order.iter().position(|o| o == f).unwrap())
+        .collect();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{local:?}"
+    );
 }
 
 #[test]
@@ -513,7 +642,11 @@ fn edge_two_links_to_the_same_table_are_told_apart() {
     let fields = vec![
         computed(ORDERS, O_SUBTOTAL, "SUM({Lines}.{Amount})"),
         computed(LINES, L_AMOUNT, "{Price} * {Qty} + SUM({Order}.{Shipping})"),
-        computed(CUSTOMERS, C_REVENUE, "SUM({Orders}.{Subtotal}) + SUM({Orders}.{Shipping})"),
+        computed(
+            CUSTOMERS,
+            C_REVENUE,
+            "SUM({Orders}.{Subtotal}) + SUM({Orders}.{Shipping})",
+        ),
     ];
     let graph = Graph::build(fields, &link_target, &name).unwrap();
     let affected = graph.affected(table(ORDERS), &set(&[O_SHIPPING]));
@@ -521,8 +654,16 @@ fn edge_two_links_to_the_same_table_are_told_apart() {
     assert_eq!(
         affected.remote,
         vec![
-            Remote { table: table(CUSTOMERS), link: fid(C_ORDERS), fields: ids(&[C_REVENUE]) },
-            Remote { table: table(LINES), link: fid(L_ORDER), fields: ids(&[L_AMOUNT]) },
+            Remote {
+                table: table(CUSTOMERS),
+                link: fid(C_ORDERS),
+                fields: ids(&[C_REVENUE])
+            },
+            Remote {
+                table: table(LINES),
+                link: fid(L_ORDER),
+                fields: ids(&[L_AMOUNT])
+            },
         ]
     );
     // The lines' amounts changed, which the orders read: the chain goes on (and would go
@@ -530,7 +671,11 @@ fn edge_two_links_to_the_same_table_are_told_apart() {
     let next = graph.affected(table(LINES), &set(&[L_AMOUNT]));
     assert_eq!(
         next.remote,
-        vec![Remote { table: table(ORDERS), link: fid(O_LINES), fields: ids(&[O_SUBTOTAL]) }]
+        vec![Remote {
+            table: table(ORDERS),
+            link: fid(O_LINES),
+            fields: ids(&[O_SUBTOTAL])
+        }]
     );
 }
 
@@ -557,9 +702,10 @@ fn order_record() -> Rec {
     for (field, value) in cells {
         record.cells.insert(fid(field), value);
     }
-    record
-        .linked
-        .insert((fid(O_LINES), fid(L_AMOUNT)), vec![money("20.00", "USD"), money("10.50", "USD")]);
+    record.linked.insert(
+        (fid(O_LINES), fid(L_AMOUNT)),
+        vec![money("20.00", "USD"), money("10.50", "USD")],
+    );
     record
 }
 
@@ -575,7 +721,10 @@ fn std_computing_a_record() {
     // … and the total adds what is stored: 30.50 + 5.80 + 4.50.
     assert_eq!(results[&fid(O_TOTAL)], Ok(money("40.80", "USD")));
     assert_eq!(results[&fid(O_LATE)], Ok(Value::Bool(true)));
-    assert_eq!(results[&fid(O_SUMMARY)], Ok(Value::Text("Spring order: 2 line(s)".into())));
+    assert_eq!(
+        results[&fid(O_SUMMARY)],
+        Ok(Value::Text("Spring order: 2 line(s)".into()))
+    );
     // 30.50 / 4 = 7.625, half-even to 7.62.
     assert_eq!(results[&fid(O_AVERAGE)], Ok(money("7.62", "USD")));
     assert_eq!(results[&fid(O_SAFE)], Ok(money("7.62", "USD")));
@@ -603,12 +752,17 @@ fn std_computing_a_record() {
     let results = graph.compute(table(LINES), &In(LINES), &line, &UTC, None);
     assert_eq!(results.len(), 1);
     assert_eq!(results[&fid(L_AMOUNT)], Ok(money("10.50", "USD")));
-    assert!(graph.compute(table(99), &In(ORDERS), &record, &UTC, None).is_empty());
+    assert!(graph
+        .compute(table(99), &In(ORDERS), &record, &UTC, None)
+        .is_empty());
     let blank = graph.compute(table(ORDERS), &In(ORDERS), &Rec::default(), &UTC, None);
     assert_eq!(blank[&fid(O_SUBTOTAL)], Ok(Value::Null));
     assert_eq!(blank[&fid(O_TOTAL)], Ok(Value::Null));
     assert_eq!(blank[&fid(O_LATE)], Ok(Value::Bool(false)));
-    assert_eq!(blank[&fid(O_SUMMARY)], Ok(Value::Text(": 0 line(s)".into())));
+    assert_eq!(
+        blank[&fid(O_SUMMARY)],
+        Ok(Value::Text(": 0 line(s)".into()))
+    );
     assert_eq!(blank[&fid(O_AVERAGE)], Err(ErrorValue::DivZero));
     assert_eq!(blank[&fid(O_SAFE)], Ok(Value::Null));
 
@@ -619,7 +773,9 @@ fn std_computing_a_record() {
             In(ORDERS).field_by_name(name)
         }
         fn field_type(&self, field: FieldId) -> Option<DataType> {
-            (field != fid(O_TAX)).then(|| In(ORDERS).field_type(field)).flatten()
+            (field != fid(O_TAX))
+                .then(|| In(ORDERS).field_type(field))
+                .flatten()
         }
         fn linked_field_by_name(&self, link: FieldId, name: &str) -> Option<FieldId> {
             In(ORDERS).linked_field_by_name(link, name)
@@ -649,10 +805,23 @@ fn std_a_computed_result_is_what_the_formula_alone_gives() {
             record.cells.remove(field);
         }
     }
-    let total = evaluate(&formula(ORDERS, "{Subtotal} + {Tax} + {Shipping}"), &In(ORDERS), &record, &UTC);
+    let total = evaluate(
+        &formula(ORDERS, "{Subtotal} + {Tax} + {Shipping}"),
+        &In(ORDERS),
+        &record,
+        &UTC,
+    );
     assert_eq!(show(&total), "40.8 USD");
-    assert_eq!(total, Val::Money(dec("40.80"), mt_core::money::Currency::new("USD").unwrap()));
-    let late = evaluate(&formula(ORDERS, "AND(NOT({Done}), {Due} < TODAY())"), &In(ORDERS), &record, &UTC);
+    assert_eq!(
+        total,
+        Val::Money(dec("40.80"), mt_core::money::Currency::new("USD").unwrap())
+    );
+    let late = evaluate(
+        &formula(ORDERS, "AND(NOT({Done}), {Due} < TODAY())"),
+        &In(ORDERS),
+        &record,
+        &UTC,
+    );
     assert_eq!(late, Val::Bool(true));
     let _ = at(2026, 1, 1, 0, 0);
 }

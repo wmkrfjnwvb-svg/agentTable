@@ -380,13 +380,22 @@ fn std_logic() {
         (r#"IF(" False ", "a", "b")"#, r#""b""#),
         (r#"IF("", "a", "b")"#, r#""b""#),
         (r#"IF({Empty number}, "a", "b")"#, r#""b""#),
-        (r#"IFS({Qty} > 5, "big", {Qty} > 2, "medium", TRUE, "small")"#, r#""medium""#),
+        (
+            r#"IFS({Qty} > 5, "big", {Qty} > 2, "medium", TRUE, "small")"#,
+            r#""medium""#,
+        ),
         (r#"IFS({Qty} > 5, "big")"#, "#N/A"),
-        (r#"SWITCH({Qty}, 1, "one", 3, "three", "other")"#, r#""three""#),
+        (
+            r#"SWITCH({Qty}, 1, "one", 3, "three", "other")"#,
+            r#""three""#,
+        ),
         (r#"SWITCH({Qty}, 1, "one", "other")"#, r#""other""#),
         (r#"SWITCH({Qty}, 1, "one", 2, "two")"#, "#N/A"),
         (r#"SWITCH({Title}, "spring ORDER", 1, 2)"#, "1"),
-        (r#"SWITCH({Status}, {Status}, "same", "different")"#, r#""same""#),
+        (
+            r#"SWITCH({Status}, {Status}, "same", "different")"#,
+            r#""same""#,
+        ),
         (r#"SWITCH({Empty number}, 0, "zero", "other")"#, r#""zero""#),
         ("AND(TRUE, {Qty} > 2)", "TRUE"),
         ("AND(TRUE, {Qty} > 5)", "FALSE"),
@@ -499,27 +508,95 @@ fn std_later_formulas_see_earlier_results() {
     let record = order();
     let formula = compile("{Qty} * 2");
     let mut computed = Computed::new();
-    assert_eq!(show(&evaluate_with(&formula, &Orders, &record, &UTC, Some(&computed))), "6");
+    assert_eq!(
+        show(&evaluate_with(
+            &formula,
+            &Orders,
+            &record,
+            &UTC,
+            Some(&computed)
+        )),
+        "6"
+    );
     // A computed value replaces the stored one …
     computed.insert(fid(QTY), Ok(num("10")));
-    assert_eq!(show(&evaluate_with(&formula, &Orders, &record, &UTC, Some(&computed))), "20");
+    assert_eq!(
+        show(&evaluate_with(
+            &formula,
+            &Orders,
+            &record,
+            &UTC,
+            Some(&computed)
+        )),
+        "20"
+    );
     assert_eq!(show(&evaluate(&formula, &Orders, &record, &UTC)), "6");
     // … an empty result is empty …
     computed.insert(fid(QTY), Ok(Value::Null));
-    assert_eq!(show(&evaluate_with(&formula, &Orders, &record, &UTC, Some(&computed))), "0");
+    assert_eq!(
+        show(&evaluate_with(
+            &formula,
+            &Orders,
+            &record,
+            &UTC,
+            Some(&computed)
+        )),
+        "0"
+    );
     // … and an error flows on, where it can be caught.
     computed.insert(fid(QTY), Err(ErrorValue::Cycle));
-    assert_eq!(show(&evaluate_with(&formula, &Orders, &record, &UTC, Some(&computed))), "#CYCLE!");
+    assert_eq!(
+        show(&evaluate_with(
+            &formula,
+            &Orders,
+            &record,
+            &UTC,
+            Some(&computed)
+        )),
+        "#CYCLE!"
+    );
     let caught = compile("IFERROR({Qty}, 0) + 1");
-    assert_eq!(show(&evaluate_with(&caught, &Orders, &record, &UTC, Some(&computed))), "1");
+    assert_eq!(
+        show(&evaluate_with(
+            &caught,
+            &Orders,
+            &record,
+            &UTC,
+            Some(&computed)
+        )),
+        "1"
+    );
     // Fields that are not computed still come from the record.
     let other = compile("{Shipping}");
-    assert_eq!(show(&evaluate_with(&other, &Orders, &record, &UTC, Some(&computed))), "4.5 USD");
+    assert_eq!(
+        show(&evaluate_with(
+            &other,
+            &Orders,
+            &record,
+            &UTC,
+            Some(&computed)
+        )),
+        "4.5 USD"
+    );
     // A field the record does not have is empty.
     let empty = Rec::default();
-    assert_eq!(show(&evaluate(&compile("{Qty}"), &Orders, &empty, &UTC)), "(blank)");
-    assert_eq!(show(&evaluate(&compile("{Lines}.{Qty}"), &Orders, &empty, &UTC)), "[]");
-    assert_eq!(show(&evaluate(&compile("SUM({Lines}.{Qty})"), &Orders, &empty, &UTC)), "0");
+    assert_eq!(
+        show(&evaluate(&compile("{Qty}"), &Orders, &empty, &UTC)),
+        "(blank)"
+    );
+    assert_eq!(
+        show(&evaluate(&compile("{Lines}.{Qty}"), &Orders, &empty, &UTC)),
+        "[]"
+    );
+    assert_eq!(
+        show(&evaluate(
+            &compile("SUM({Lines}.{Qty})"),
+            &Orders,
+            &empty,
+            &UTC
+        )),
+        "0"
+    );
 }
 
 #[test]
@@ -538,8 +615,12 @@ fn std_cell_values_from_other_kinds_of_fields() {
         ("{Extra}", "(blank)"),
     ]);
     let mut record = order();
-    record.cells.insert(fid(EXTRA), Value::Json(serde_json::json!({"a": 1})));
-    record.cells.insert(fid(TAGS), Value::MultiReference(vec![]));
+    record
+        .cells
+        .insert(fid(EXTRA), Value::Json(serde_json::json!({"a": 1})));
+    record
+        .cells
+        .insert(fid(TAGS), Value::MultiReference(vec![]));
     record.cells.insert(fid(OWNER), Value::Principal(vec![]));
     check_in(
         &[
@@ -560,55 +641,109 @@ fn to(source: &str, target: DataType) -> Result<Value, ErrorValue> {
 #[test]
 fn std_results_become_cell_values() {
     // Amounts are rounded half-even to the currency's minor units, once, at the end.
-    assert_eq!(to("{Price} * {Qty} * (1 - {Discount})", DataType::Money), Ok(money("53.97", "USD")));
-    assert_eq!(to("{Price} / 2", DataType::Money), Ok(money("10.00", "USD")));
-    assert_eq!(to("{Price} * 0.5 + {Price} * 0.5", DataType::Money), Ok(money("19.99", "USD")));
-    assert_eq!(to("{Shipping} / 8", DataType::Money), Ok(money("0.56", "USD")));
+    assert_eq!(
+        to("{Price} * {Qty} * (1 - {Discount})", DataType::Money),
+        Ok(money("53.97", "USD"))
+    );
+    assert_eq!(
+        to("{Price} / 2", DataType::Money),
+        Ok(money("10.00", "USD"))
+    );
+    assert_eq!(
+        to("{Price} * 0.5 + {Price} * 0.5", DataType::Money),
+        Ok(money("19.99", "USD"))
+    );
+    assert_eq!(
+        to("{Shipping} / 8", DataType::Money),
+        Ok(money("0.56", "USD"))
+    );
     assert_eq!(to("{Qty} * 2", DataType::Number), Ok(num("6")));
     assert_eq!(to("1.50", DataType::Number), Ok(num("1.5")));
-    assert_eq!(to("{Discount} * 2", DataType::Percent), Ok(Value::Percent(dec("0.2"))));
+    assert_eq!(
+        to("{Discount} * 2", DataType::Percent),
+        Ok(Value::Percent(dec("0.2")))
+    );
     assert_eq!(to("{Qty} > 1", DataType::Bool), Ok(Value::Bool(true)));
-    assert_eq!(to("{Due} + 1", DataType::Date), Ok(Value::Date(day(2026, 5, 21))));
-    assert_eq!(to("NOW()", DataType::DateTime), Ok(Value::DateTime(at(2026, 5, 13, 10, 30))));
+    assert_eq!(
+        to("{Due} + 1", DataType::Date),
+        Ok(Value::Date(day(2026, 5, 21)))
+    );
+    assert_eq!(
+        to("NOW()", DataType::DateTime),
+        Ok(Value::DateTime(at(2026, 5, 13, 10, 30)))
+    );
     assert_eq!(
         to("{Effort} * 2", DataType::Duration),
         Ok(Value::Duration(DurationMs::from_millis(10_800_000)))
     );
-    assert_eq!(to("{Status}", DataType::Reference), Ok(Value::Reference(item(1))));
-    assert_eq!(to("{Status}", DataType::MultiReference), Ok(Value::MultiReference(vec![item(1)])));
+    assert_eq!(
+        to("{Status}", DataType::Reference),
+        Ok(Value::Reference(item(1)))
+    );
+    assert_eq!(
+        to("{Status}", DataType::MultiReference),
+        Ok(Value::MultiReference(vec![item(1)]))
+    );
     assert_eq!(
         to("{Tags}", DataType::MultiReference),
         Ok(Value::MultiReference(vec![item(1), item(2)]))
     );
     assert_eq!(
-        to("FILTER({Tags}, CurrentValue = {Status})", DataType::MultiReference),
+        to(
+            "FILTER({Tags}, CurrentValue = {Status})",
+            DataType::MultiReference
+        ),
         Ok(Value::MultiReference(vec![item(1)]))
     );
     assert_eq!(
         to("UNIQUE({Lines}.{Labels})", DataType::MultiReference),
         Ok(Value::MultiReference(vec![item(1), item(2)]))
     );
-    assert_eq!(to("FILTER({Tags}, FALSE)", DataType::MultiReference), Ok(Value::Null));
+    assert_eq!(
+        to("FILTER({Tags}, FALSE)", DataType::MultiReference),
+        Ok(Value::Null)
+    );
     // Anything can be shown as text: references by their labels.
     assert_eq!(to("{Qty} * 2", DataType::Text), Ok(Value::Text("6".into())));
-    assert_eq!(to("{Status}", DataType::Text), Ok(Value::Text("Open".into())));
-    assert_eq!(to("{Tags}", DataType::Text), Ok(Value::Text("Open, Closed".into())));
-    assert_eq!(to("{Price} / 2", DataType::Text), Ok(Value::Text("10.00 USD".into())));
-    assert_eq!(to("{Title}", DataType::LongText), Ok(Value::LongText("Spring order".into())));
+    assert_eq!(
+        to("{Status}", DataType::Text),
+        Ok(Value::Text("Open".into()))
+    );
+    assert_eq!(
+        to("{Tags}", DataType::Text),
+        Ok(Value::Text("Open, Closed".into()))
+    );
+    assert_eq!(
+        to("{Price} / 2", DataType::Text),
+        Ok(Value::Text("10.00 USD".into()))
+    );
+    assert_eq!(
+        to("{Title}", DataType::LongText),
+        Ok(Value::LongText("Spring order".into()))
+    );
     assert_eq!(to(r#""  ""#, DataType::Text), Ok(Value::Null));
     // Nothing but empty amounts leaves no amount (there is no currency to state it in);
     // nothing but empty durations is a duration of zero.
     assert_eq!(to("{Empty money} * 2", DataType::Money), Ok(Value::Null));
-    assert_eq!(to("{Empty money} + {Empty money}", DataType::Money), Ok(Value::Null));
+    assert_eq!(
+        to("{Empty money} + {Empty money}", DataType::Money),
+        Ok(Value::Null)
+    );
     assert_eq!(to("-{Empty money}", DataType::Money), Ok(Value::Null));
     assert_eq!(to("SUM({Empty money})", DataType::Money), Ok(Value::Null));
-    assert_eq!(to("ROUND({Empty money}, 2)", DataType::Money), Ok(Value::Null));
+    assert_eq!(
+        to("ROUND({Empty money}, 2)", DataType::Money),
+        Ok(Value::Null)
+    );
     assert_eq!(
         to("{Empty number} * 2", DataType::Duration),
         Ok(Value::Duration(DurationMs::from_millis(0)))
     );
     assert_eq!(to("{Empty date} + 7", DataType::Date), Ok(Value::Null));
-    assert_eq!(to("{Due} - {Empty date}", DataType::Number), Ok(Value::Null));
+    assert_eq!(
+        to("{Due} - {Empty date}", DataType::Number),
+        Ok(Value::Null)
+    );
     // Empty stays empty, for every kind of field.
     for target in DataType::ALL.iter().copied() {
         assert_eq!(to("BLANK()", target), Ok(Value::Null), "{target:?}");
@@ -638,12 +773,23 @@ fn invalid_results_of_the_wrong_kind() {
     assert_eq!(to("{Effort}", DataType::Money), wrong);
     assert_eq!(to("{Title}", DataType::Bool), wrong);
     // Computed fields never produce links, people, attachments or structured data.
-    for target in [DataType::Link, DataType::Principal, DataType::Attachment, DataType::Json] {
+    for target in [
+        DataType::Link,
+        DataType::Principal,
+        DataType::Attachment,
+        DataType::Json,
+    ] {
         assert_eq!(to("{Qty}", target), wrong, "{target:?}");
         assert_eq!(to("{Lines}", target), wrong, "{target:?}");
     }
-    assert_eq!(to(r#"{Price} + PARAM("ship.eur")"#, DataType::Money), Err(ErrorValue::Currency));
-    assert_eq!(to(r#""x" & 1 / 0"#, DataType::Text), Err(ErrorValue::DivZero));
+    assert_eq!(
+        to(r#"{Price} + PARAM("ship.eur")"#, DataType::Money),
+        Err(ErrorValue::Currency)
+    );
+    assert_eq!(
+        to(r#""x" & 1 / 0"#, DataType::Text),
+        Err(ErrorValue::DivZero)
+    );
 
     // Lists that are converted directly.
     let labels = |_| None;
@@ -653,8 +799,14 @@ fn invalid_results_of_the_wrong_kind() {
         Ok(Value::MultiReference(vec![item(2), item(1)]))
     );
     let broken = Val::List(vec![Val::Ref(item(2)), Val::Error(ErrorValue::Num)]);
-    assert_eq!(broken.clone().into_value(DataType::MultiReference, &labels), Err(ErrorValue::Num));
-    assert_eq!(broken.into_value(DataType::Text, &labels), Err(ErrorValue::Num));
+    assert_eq!(
+        broken.clone().into_value(DataType::MultiReference, &labels),
+        Err(ErrorValue::Num)
+    );
+    assert_eq!(
+        broken.into_value(DataType::Text, &labels),
+        Err(ErrorValue::Num)
+    );
     // Without a label, a reference is shown by its id.
     assert_eq!(
         Val::Ref(item(2)).into_value(DataType::Text, &labels),
@@ -695,7 +847,10 @@ fn std_value_conversions() {
     assert_eq!(Val::Blank.text(&labels), Ok(String::new()));
     assert_eq!(Val::Bool(true).text(&labels), Ok("TRUE".into()));
     assert_eq!(Val::Number(dec("1.500")).text(&labels), Ok("1.5".into()));
-    assert_eq!(Val::Error(ErrorValue::Num).text(&labels), Err(ErrorValue::Num));
+    assert_eq!(
+        Val::Error(ErrorValue::Num).text(&labels),
+        Err(ErrorValue::Num)
+    );
     // Emptiness and errors.
     assert!(Val::Blank.is_blank());
     assert!(Val::Text(" \n".into()).is_blank());
@@ -707,20 +862,53 @@ fn std_value_conversions() {
     assert_eq!(Val::Blank.error(), None);
     // Comparison results.
     use core::cmp::Ordering::{Equal, Greater, Less};
-    assert_eq!(Val::Number(dec("1")).compare(&Val::Number(dec("2"))), Ok(Comparison::Ordered(Less)));
-    assert_eq!(Val::Blank.compare(&Val::Blank), Ok(Comparison::Ordered(Equal)));
-    assert_eq!(Val::Number(dec("1")).compare(&Val::Blank), Ok(Comparison::Ordered(Greater)));
-    assert_eq!(Val::Blank.compare(&Val::Date(day(2026, 1, 1))), Ok(Comparison::Unknown));
-    assert_eq!(Val::Date(day(2026, 1, 1)).compare(&Val::Blank), Ok(Comparison::Unknown));
-    assert_eq!(Val::Ref(item(1)).compare(&Val::Ref(item(2))), Ok(Comparison::Unordered(false)));
-    assert_eq!(Val::Ref(item(1)).compare(&Val::Number(dec("1"))), Ok(Comparison::Mismatch));
-    assert_eq!(Val::List(vec![]).compare(&Val::Blank), Err(ErrorValue::Value));
-    assert_eq!(Val::Blank.compare(&Val::Error(ErrorValue::Ref)), Err(ErrorValue::Ref));
+    assert_eq!(
+        Val::Number(dec("1")).compare(&Val::Number(dec("2"))),
+        Ok(Comparison::Ordered(Less))
+    );
+    assert_eq!(
+        Val::Blank.compare(&Val::Blank),
+        Ok(Comparison::Ordered(Equal))
+    );
+    assert_eq!(
+        Val::Number(dec("1")).compare(&Val::Blank),
+        Ok(Comparison::Ordered(Greater))
+    );
+    assert_eq!(
+        Val::Blank.compare(&Val::Date(day(2026, 1, 1))),
+        Ok(Comparison::Unknown)
+    );
+    assert_eq!(
+        Val::Date(day(2026, 1, 1)).compare(&Val::Blank),
+        Ok(Comparison::Unknown)
+    );
+    assert_eq!(
+        Val::Ref(item(1)).compare(&Val::Ref(item(2))),
+        Ok(Comparison::Unordered(false))
+    );
+    assert_eq!(
+        Val::Ref(item(1)).compare(&Val::Number(dec("1"))),
+        Ok(Comparison::Mismatch)
+    );
+    assert_eq!(
+        Val::List(vec![]).compare(&Val::Blank),
+        Err(ErrorValue::Value)
+    );
+    assert_eq!(
+        Val::Blank.compare(&Val::Error(ErrorValue::Ref)),
+        Err(ErrorValue::Ref)
+    );
     // Every cell value has an evaluation value, and what is stored empty is blank.
     assert_eq!(Val::from_value(&Value::Null), Val::Blank);
     assert_eq!(Val::from_value(&Value::Text(String::new())), Val::Blank);
-    assert_eq!(Val::from_value(&Value::Percent(dec("0.25"))), Val::Number(dec("0.25")));
-    assert_eq!(Val::from_value(&Value::LongText("a".into())), Val::Text("a".into()));
+    assert_eq!(
+        Val::from_value(&Value::Percent(dec("0.25"))),
+        Val::Number(dec("0.25"))
+    );
+    assert_eq!(
+        Val::from_value(&Value::LongText("a".into())),
+        Val::Text("a".into())
+    );
     assert_eq!(Val::from_value(&Value::Link(vec![])), Val::List(vec![]));
 }
 
@@ -736,16 +924,29 @@ fn anomalous_hand_built_trees_cannot_break_evaluation() {
         (Function::Number(NumberFn::Round), 0),
         (Function::Number(NumberFn::Sum), 0),
     ] {
-        let tree = Expr::Call { function, args: vec![Expr::Bool(true); count] };
-        assert_eq!(show(&evaluate(&tree, &Orders, &record, &UTC)), "#VALUE!", "{function:?} with {count}");
+        let tree = Expr::Call {
+            function,
+            args: vec![Expr::Bool(true); count],
+        };
+        assert_eq!(
+            show(&evaluate(&tree, &Orders, &record, &UTC)),
+            "#VALUE!",
+            "{function:?} with {count}"
+        );
     }
     // Deeper than any parsed formula.
     let mut deep = Expr::Field(fid(QTY));
     for _ in 0..100 {
-        deep = Expr::Unary { op: UnaryOp::Negate, operand: Box::new(deep) };
+        deep = Expr::Unary {
+            op: UnaryOp::Negate,
+            operand: Box::new(deep),
+        };
     }
     assert_eq!(show(&evaluate(&deep, &Orders, &record, &UTC)), "#LIMIT!");
-    assert_eq!(evaluate_to(&deep, &Orders, &record, &UTC, None, DataType::Number), Err(ErrorValue::Limit));
+    assert_eq!(
+        evaluate_to(&deep, &Orders, &record, &UTC, None, DataType::Number),
+        Err(ErrorValue::Limit)
+    );
     // A field that no longer exists is `#REF!`, which can be caught like any error.
     let ghost = Expr::Binary {
         op: BinaryOp::Add,
@@ -753,10 +954,22 @@ fn anomalous_hand_built_trees_cannot_break_evaluation() {
         right: Box::new(Expr::Number(dec("1"))),
     };
     assert_eq!(show(&evaluate(&ghost, &Orders, &record, &UTC)), "#REF!");
-    let ghost_link = Expr::Through { link: fid(998), field: fid(999) };
-    assert_eq!(show(&evaluate(&ghost_link, &Orders, &record, &UTC)), "#REF!");
-    let ghost_linked_field = Expr::Through { link: fid(LINES), field: fid(999) };
-    assert_eq!(show(&evaluate(&ghost_linked_field, &Orders, &record, &UTC)), "#REF!");
+    let ghost_link = Expr::Through {
+        link: fid(998),
+        field: fid(999),
+    };
+    assert_eq!(
+        show(&evaluate(&ghost_link, &Orders, &record, &UTC)),
+        "#REF!"
+    );
+    let ghost_linked_field = Expr::Through {
+        link: fid(LINES),
+        field: fid(999),
+    };
+    assert_eq!(
+        show(&evaluate(&ghost_linked_field, &Orders, &record, &UTC)),
+        "#REF!"
+    );
     let caught = Expr::Call {
         function: Function::Logic(LogicFn::IfError),
         args: vec![ghost, Expr::Number(dec("0"))],
@@ -768,7 +981,9 @@ fn anomalous_hand_built_trees_cannot_break_evaluation() {
 fn with_lines(count: usize) -> Rec {
     let mut record = order();
     let quantities = (1..=count).map(|n| num(&n.to_string())).collect();
-    record.linked.insert((fid(LINES), fid(LINE_QTY)), quantities);
+    record
+        .linked
+        .insert((fid(LINES), fid(LINE_QTY)), quantities);
     record
 }
 
@@ -778,13 +993,19 @@ fn edge_evaluation_is_bounded() {
     let full = with_lines(MAX_LIST_ITEMS);
     assert_eq!(run_in("COUNT({Lines}.{Qty})", &full, &UTC), "10000");
     assert_eq!(run_in("SUM({Lines}.{Qty})", &full, &UTC), "50005000");
-    assert_eq!(run_in("COUNTIF({Lines}.{Qty}, CurrentValue > 9990)", &full, &UTC), "10");
+    assert_eq!(
+        run_in("COUNTIF({Lines}.{Qty}, CurrentValue > 9990)", &full, &UTC),
+        "10"
+    );
     let over = with_lines(MAX_LIST_ITEMS + 1);
     assert_eq!(run_in("COUNT({Lines}.{Qty})", &over, &UTC), "#LIMIT!");
     assert_eq!(run_in("IFERROR(SUM({Lines}.{Qty}), -1)", &over, &UTC), "-1");
 
     // Steps: a condition evaluated for every item of a long list adds up.
-    let heavy = format!("COUNTIF({{Lines}}.{{Qty}}, CurrentValue{} > 0)", " + 1".repeat(12));
+    let heavy = format!(
+        "COUNTIF({{Lines}}.{{Qty}}, CurrentValue{} > 0)",
+        " + 1".repeat(12)
+    );
     assert_eq!(run_in(&heavy, &with_lines(1_000), &UTC), "1000");
     assert_eq!(run_in(&heavy, &full, &UTC), "#LIMIT!");
     let nested = "COUNTIF({Lines}.{Qty}, COUNTIF({Lines}.{Qty}, CurrentValue > 0) > 0)";
@@ -796,11 +1017,26 @@ fn edge_evaluation_is_bounded() {
     assert_eq!(run(r#"REPT("x", 100001)"#), "#LIMIT!");
     assert_eq!(run(r#"REPT("ab", 50001)"#), "#LIMIT!");
     assert_eq!(run(r#"LEN(REPT("x", 100000) & "y")"#), "#LIMIT!");
-    assert_eq!(run(r#"LEN(CONCAT(REPT("x", 60000), REPT("y", 40000)))"#), "100000");
-    assert_eq!(run(r#"CONCAT(REPT("x", 60000), REPT("y", 40001))"#), "#LIMIT!");
-    assert_eq!(run(r#"LEN(TEXTJOIN(REPT("-", 49998), FALSE, "a", "b", "c"))"#), "99999");
-    assert_eq!(run(r#"TEXTJOIN(REPT("-", 50000), FALSE, "a", "b", "c")"#), "#LIMIT!");
-    assert_eq!(run(r#"SUBSTITUTE(REPT("x", 100000), "x", "yy")"#), "#LIMIT!");
+    assert_eq!(
+        run(r#"LEN(CONCAT(REPT("x", 60000), REPT("y", 40000)))"#),
+        "100000"
+    );
+    assert_eq!(
+        run(r#"CONCAT(REPT("x", 60000), REPT("y", 40001))"#),
+        "#LIMIT!"
+    );
+    assert_eq!(
+        run(r#"LEN(TEXTJOIN(REPT("-", 49998), FALSE, "a", "b", "c"))"#),
+        "99999"
+    );
+    assert_eq!(
+        run(r#"TEXTJOIN(REPT("-", 50000), FALSE, "a", "b", "c")"#),
+        "#LIMIT!"
+    );
+    assert_eq!(
+        run(r#"SUBSTITUTE(REPT("x", 100000), "x", "yy")"#),
+        "#LIMIT!"
+    );
     assert_eq!(run(r#"REPLACE(REPT("x", 100000), 1, 0, "y")"#), "#LIMIT!");
     assert_eq!(run(r#"UPPER(REPT("ß", 60000))"#), "#LIMIT!");
     // Characters are counted, not bytes.

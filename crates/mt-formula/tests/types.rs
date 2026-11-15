@@ -38,7 +38,9 @@ fn refused(cases: &[(&str, &str)]) {
         .iter()
         .filter_map(|(source, needle)| match check(&compile(source), &Orders) {
             Err(FormulaError::Type(message)) if message.contains(needle) => None,
-            other => Some(format!("{source}\n     expected a type error with `{needle}`\n     found    {other:?}")),
+            other => Some(format!(
+                "{source}\n     expected a type error with `{needle}`\n     found    {other:?}"
+            )),
         })
         .collect();
     assert!(failures.is_empty(), "\n{}\n", failures.join("\n"));
@@ -86,7 +88,10 @@ fn std_types_of_values_and_fields() {
     assert_eq!(Type::Duration.data_type(), Some(DataType::Duration));
     assert_eq!(Type::Money.data_type(), Some(DataType::Money));
     assert_eq!(Type::Reference.data_type(), Some(DataType::Reference));
-    assert_eq!(list(Type::Reference).data_type(), Some(DataType::MultiReference));
+    assert_eq!(
+        list(Type::Reference).data_type(),
+        Some(DataType::MultiReference)
+    );
     assert_eq!(list(Type::Text).data_type(), None);
     assert_eq!(Type::Any.data_type(), None);
 }
@@ -209,8 +214,23 @@ fn std_types_of_comparisons_and_logic() {
         ("IF({Done}, 1)", Type::Number),
         ("IF({Qty}, {Due}, TODAY())", Type::Date),
         (r#"IF("true", {Price}, {Shipping})"#, Type::Money),
+        // An empty alternative says nothing about the kind of the others.
         ("IF({Done}, BLANK(), {Due})", Type::Date),
-        ("IF({Done}, {Tags}, {Lines}.{Labels})", list(Type::Reference)),
+        (
+            "IF({Done}, {Due}, IF({Qty} > 1, BLANK(), BLANK()))",
+            Type::Date,
+        ),
+        ("IFS({Done}, BLANK(), TRUE, {Price})", Type::Money),
+        ("IF({Done}, BLANK(), BLANK())", Type::Any),
+        ("IF({Done}, BLANK())", Type::Any),
+        // An alternative of unknown kind makes the whole unknown.
+        (r#"IF({Done}, IF({Qty} > 1, "a", 1), 2)"#, Type::Any),
+        (r#"IF({Done}, PARAM("x"), 2)"#, Type::Any),
+        (r#"IFERROR(PARAM("x"), 0)"#, Type::Any),
+        (
+            "IF({Done}, {Tags}, {Lines}.{Labels})",
+            list(Type::Reference),
+        ),
         // Alternatives of different kinds are allowed; the kind is then unknown.
         (r#"IF({Done}, "a", 2)"#, Type::Any),
         ("IF({Done}, {Tags}, {Lines}.{Qty})", list(Type::Any)),
@@ -312,10 +332,19 @@ fn std_types_of_functions() {
         ("TO_HOURS({Effort})", Type::Number),
         ("TO_DAYS(NOW() - {Created})", Type::Number),
         ("COUNTIF({Lines}.{Qty}, CurrentValue > 1)", Type::Number),
-        (r#"SUMIF({Lines}.{Qty}, ">1", {Lines}.{Amount})"#, Type::Money),
+        (
+            r#"SUMIF({Lines}.{Qty}, ">1", {Lines}.{Amount})"#,
+            Type::Money,
+        ),
         (r#"SUMIF({Lines}.{Qty}, ">1")"#, Type::Number),
-        ("AVERAGEIF({Lines}.{Amount}, CurrentValue > {Shipping})", Type::Money),
-        (r#"FILTER({Lines}.{Name}, CurrentValue <> "x")"#, list(Type::Text)),
+        (
+            "AVERAGEIF({Lines}.{Amount}, CurrentValue > {Shipping})",
+            Type::Money,
+        ),
+        (
+            r#"FILTER({Lines}.{Name}, CurrentValue <> "x")"#,
+            list(Type::Text),
+        ),
         ("UNIQUE({Tags})", list(Type::Reference)),
         ("UNIQUE({Qty})", list(Type::Number)),
         ("FIRST({Lines}.{Amount})", Type::Money),
@@ -323,13 +352,25 @@ fn std_types_of_functions() {
         ("FIRST({Qty})", Type::Number),
         ("INDEX({Lines}.{Name}, 1)", Type::Text),
         // The current item may be used anywhere inside the condition.
-        ("COUNTIF({Lines}.{Qty}, IF(CurrentValue > 1, TRUE, FALSE))", Type::Number),
-        ("FILTER({Lines}.{Qty}, SUM(CurrentValue, 1) > 2)", list(Type::Number)),
-        ("COUNTIF({Lines}.{Qty}, COUNTIF({Tags}, CurrentValue = {Status}) > CurrentValue)", Type::Number),
+        (
+            "COUNTIF({Lines}.{Qty}, IF(CurrentValue > 1, TRUE, FALSE))",
+            Type::Number,
+        ),
+        (
+            "FILTER({Lines}.{Qty}, SUM(CurrentValue, 1) > 2)",
+            list(Type::Number),
+        ),
+        (
+            "COUNTIF({Lines}.{Qty}, COUNTIF({Tags}, CurrentValue = {Status}) > CurrentValue)",
+            Type::Number,
+        ),
         ("LABEL({Status})", Type::Text),
         ("CODE({Status})", Type::Text),
         ("LABEL({Tags})", list(Type::Text)),
-        ("LABEL(FILTER({Tags}, CurrentValue = {Status}))", list(Type::Text)),
+        (
+            "LABEL(FILTER({Tags}, CurrentValue = {Status}))",
+            list(Type::Text),
+        ),
         (r#"ATTR({Status}, "w")"#, Type::Any),
         (r#"ATTR({Tags}, "w")"#, list(Type::Any)),
         (r#"LABEL(ATTR({Tags}, "parent"))"#, list(Type::Text)),
@@ -342,25 +383,52 @@ fn invalid_operands() {
     refused(&[
         ("{Price} + 1", "`+` cannot combine an amount and a number"),
         ("1 - {Price}", "`-` cannot combine a number and an amount"),
-        ("{Price} * {Price}", "`*` cannot combine an amount and an amount"),
+        (
+            "{Price} * {Price}",
+            "`*` cannot combine an amount and an amount",
+        ),
         ("2 / {Price}", "`/` cannot combine a number and an amount"),
-        ("{Price} + {Effort}", "cannot combine an amount and a duration"),
-        ("{Price} * {Effort}", "cannot combine an amount and a duration"),
+        (
+            "{Price} + {Effort}",
+            "cannot combine an amount and a duration",
+        ),
+        (
+            "{Price} * {Effort}",
+            "cannot combine an amount and a duration",
+        ),
         ("{Due} + {Due}", "cannot combine a date and a date"),
         ("{Due} * 2", "cannot combine a date and a number"),
         ("{Due} / 2", "cannot combine a date and a number"),
         ("1 - {Due}", "cannot combine a number and a date"),
-        ("{Created} + 1", "cannot combine a date and time and a number"),
-        ("{Created} - {Due}", "cannot combine a date and time and a date"),
+        (
+            "{Created} + 1",
+            "cannot combine a date and time and a number",
+        ),
+        (
+            "{Created} - {Due}",
+            "cannot combine a date and time and a date",
+        ),
         ("{Created} + {Created}", "cannot combine"),
         ("{Effort} + 1", "cannot combine a duration and a number"),
-        ("{Effort} - {Created}", "cannot combine a duration and a date and time"),
-        ("{Effort} * {Effort}", "cannot combine a duration and a duration"),
+        (
+            "{Effort} - {Created}",
+            "cannot combine a duration and a date and time",
+        ),
+        (
+            "{Effort} * {Effort}",
+            "cannot combine a duration and a duration",
+        ),
         ("2 / {Effort}", "cannot combine a number and a duration"),
         ("{Status} + 1", "cannot combine a reference and a number"),
-        ("{Status} * {Status}", "cannot combine a reference and a reference"),
+        (
+            "{Status} * {Status}",
+            "cannot combine a reference and a reference",
+        ),
         ("{Tags} + 1", "`+` cannot calculate with a list"),
-        ("{Lines}.{Qty} * 2", "`*` cannot calculate with a list; use SUM"),
+        (
+            "{Lines}.{Qty} * 2",
+            "`*` cannot calculate with a list; use SUM",
+        ),
         ("1 - {Lines}.{Qty}", "cannot calculate with a list"),
         ("-{Due}", "`-` cannot negate a date"),
         ("-{Tags}", "`-` cannot negate a list"),
@@ -379,12 +447,18 @@ fn invalid_comparisons() {
         ("{Due} < {Created}", "compares a date with a date and time"),
         ("{Done} = 1", "compares true/false with a number"),
         ("{Status} = {Title}", "compares a reference with text"),
-        ("{Status} < {Status}", "`<` cannot order references; compare their LABEL or CODE"),
+        (
+            "{Status} < {Status}",
+            "`<` cannot order references; compare their LABEL or CODE",
+        ),
         ("{Status} >= {Status}", "cannot order references"),
         (r#"{Status} > PARAM("x")"#, "cannot order references"),
         // Only `=` and `<>` ask whether there is a value.
         (r#"{Qty} < """#, "compares a number with text"),
-        ("{Tags} = {Status}", "`=` cannot compare a list; use CONTAINS"),
+        (
+            "{Tags} = {Status}",
+            "`=` cannot compare a list; use CONTAINS",
+        ),
         ("{Lines}.{Qty} > 1", "cannot compare a list"),
         (r#"{Tags} = """#, "cannot compare a list"),
     ]);
@@ -392,7 +466,8 @@ fn invalid_comparisons() {
 
 #[test]
 fn invalid_use_of_the_current_item() {
-    let message = "CurrentValue can only be used in the condition of FILTER, COUNTIF, SUMIF or AVERAGEIF";
+    let message =
+        "CurrentValue can only be used in the condition of FILTER, COUNTIF, SUMIF or AVERAGEIF";
     refused(&[
         ("CurrentValue + 1", message),
         ("IF(CurrentValue, 1, 2)", message),
@@ -406,82 +481,244 @@ fn invalid_use_of_the_current_item() {
 #[test]
 fn invalid_arguments() {
     refused(&[
-        ("IF({Due}, 1, 2)", "IF needs a condition as argument 1, not a date"),
-        ("IF({Tags}, 1, 2)", "IF needs a condition as argument 1, not a list"),
-        ("IFS({Qty} > 1, 1, {Price}, 2)", "IFS needs a condition as argument 3, not an amount"),
-        ("AND(TRUE, {Status})", "AND needs a condition as argument 2, not a reference"),
-        ("OR({Effort})", "OR needs a condition as argument 1, not a duration"),
-        ("NOT({Tags})", "NOT needs a condition as argument 1, not a list"),
-        ("XOR(TRUE, FALSE, {Created})", "XOR needs a condition as argument 3, not a date and time"),
+        (
+            "IF({Due}, 1, 2)",
+            "IF needs a condition as argument 1, not a date",
+        ),
+        (
+            "IF({Tags}, 1, 2)",
+            "IF needs a condition as argument 1, not a list",
+        ),
+        (
+            "IFS({Qty} > 1, 1, {Price}, 2)",
+            "IFS needs a condition as argument 3, not an amount",
+        ),
+        (
+            "AND(TRUE, {Status})",
+            "AND needs a condition as argument 2, not a reference",
+        ),
+        (
+            "OR({Effort})",
+            "OR needs a condition as argument 1, not a duration",
+        ),
+        (
+            "NOT({Tags})",
+            "NOT needs a condition as argument 1, not a list",
+        ),
+        (
+            "XOR(TRUE, FALSE, {Created})",
+            "XOR needs a condition as argument 3, not a date and time",
+        ),
         ("SUM({Due})", "SUM cannot work with a date"),
-        ("AVERAGE({Lines}.{Shipped})", "AVERAGE cannot work with a date"),
-        ("MEDIAN({Created})", "MEDIAN cannot work with a date and time"),
-        ("SUM({Price}, 1)", "SUM cannot combine an amount and plain numbers"),
-        ("SUM({Price}, {Effort})", "SUM cannot combine an amount and a duration"),
-        ("MAX({Due}, {Created})", "MAX cannot combine a date and a date and time"),
-        ("MIN({Due}, 5)", "MIN cannot combine a date and plain numbers"),
-        (r#"SUMIF({Lines}.{Qty}, ">1", {Lines}.{Shipped})"#, "SUMIF cannot work with a date"),
-        ("AVERAGEIF({Lines}.{Shipped}, TRUE)", "AVERAGEIF cannot work with a date"),
+        (
+            "AVERAGE({Lines}.{Shipped})",
+            "AVERAGE cannot work with a date",
+        ),
+        (
+            "MEDIAN({Created})",
+            "MEDIAN cannot work with a date and time",
+        ),
+        (
+            "SUM({Price}, 1)",
+            "SUM cannot combine an amount and plain numbers",
+        ),
+        (
+            "SUM({Price}, {Effort})",
+            "SUM cannot combine an amount and a duration",
+        ),
+        (
+            "MAX({Due}, {Created})",
+            "MAX cannot combine a date and a date and time",
+        ),
+        (
+            "MIN({Due}, 5)",
+            "MIN cannot combine a date and plain numbers",
+        ),
+        (
+            r#"SUMIF({Lines}.{Qty}, ">1", {Lines}.{Shipped})"#,
+            "SUMIF cannot work with a date",
+        ),
+        (
+            "AVERAGEIF({Lines}.{Shipped}, TRUE)",
+            "AVERAGEIF cannot work with a date",
+        ),
         ("ABS({Due})", "ABS needs a number or an amount, not a date"),
-        ("ROUND({Tags})", "ROUND needs a number or an amount, not a list"),
-        ("ROUND({Qty}, {Due})", "ROUND needs a number as argument 2, not a date"),
-        ("CEILING({Qty}, {Price})", "CEILING needs a number as argument 2, not an amount"),
-        ("FLOOR({Effort})", "FLOOR needs a number or an amount, not a duration"),
-        ("SIGN({Due})", "SIGN needs a number or an amount as argument 1, not a date"),
-        ("INT({Price})", "INT needs a number as argument 1, not an amount"),
-        ("MOD({Qty}, {Due})", "MOD needs a number as argument 2, not a date"),
+        (
+            "ROUND({Tags})",
+            "ROUND needs a number or an amount, not a list",
+        ),
+        (
+            "ROUND({Qty}, {Due})",
+            "ROUND needs a number as argument 2, not a date",
+        ),
+        (
+            "CEILING({Qty}, {Price})",
+            "CEILING needs a number as argument 2, not an amount",
+        ),
+        (
+            "FLOOR({Effort})",
+            "FLOOR needs a number or an amount, not a duration",
+        ),
+        (
+            "SIGN({Due})",
+            "SIGN needs a number or an amount as argument 1, not a date",
+        ),
+        (
+            "INT({Price})",
+            "INT needs a number as argument 1, not an amount",
+        ),
+        (
+            "MOD({Qty}, {Due})",
+            "MOD needs a number as argument 2, not a date",
+        ),
         ("MOD({Due}, 2)", "MOD needs a number as argument 1"),
-        ("POWER({Due}, 2)", "POWER needs a number as argument 1, not a date"),
-        ("POWER(2, {Tags})", "POWER needs a number as argument 2, not a list"),
+        (
+            "POWER({Due}, 2)",
+            "POWER needs a number as argument 1, not a date",
+        ),
+        (
+            "POWER(2, {Tags})",
+            "POWER needs a number as argument 2, not a list",
+        ),
         ("LEFT({Title}, {Due})", "LEFT needs a number as argument 2"),
-        ("RIGHT({Title}, {Status})", "RIGHT needs a number as argument 2"),
+        (
+            "RIGHT({Title}, {Status})",
+            "RIGHT needs a number as argument 2",
+        ),
         ("MID({Title}, {Due}, 1)", "MID needs a number as argument 2"),
         ("MID({Title}, 1, {Due})", "MID needs a number as argument 3"),
-        (r#"REPT("a", {Tags})"#, "REPT needs a number as argument 2, not a list"),
-        (r#"REPLACE("a", {Due}, 1, "b")"#, "REPLACE needs a number as argument 2"),
-        (r#"REPLACE("a", 1, {Due}, "b")"#, "REPLACE needs a number as argument 3"),
-        (r#"SUBSTITUTE("a", "b", "c", {Due})"#, "SUBSTITUTE needs a number as argument 4"),
-        (r#"FIND("a", "b", {Due})"#, "FIND needs a number as argument 3"),
-        (r#"SEARCH("a", "b", {Price})"#, "SEARCH needs a number as argument 3"),
-        ("VALUE({Due})", "VALUE needs a number as argument 1, not a date"),
-        (r#"TEXT({Title}, "0")"#, "TEXT formats numbers, amounts and dates, not text"),
+        (
+            r#"REPT("a", {Tags})"#,
+            "REPT needs a number as argument 2, not a list",
+        ),
+        (
+            r#"REPLACE("a", {Due}, 1, "b")"#,
+            "REPLACE needs a number as argument 2",
+        ),
+        (
+            r#"REPLACE("a", 1, {Due}, "b")"#,
+            "REPLACE needs a number as argument 3",
+        ),
+        (
+            r#"SUBSTITUTE("a", "b", "c", {Due})"#,
+            "SUBSTITUTE needs a number as argument 4",
+        ),
+        (
+            r#"FIND("a", "b", {Due})"#,
+            "FIND needs a number as argument 3",
+        ),
+        (
+            r#"SEARCH("a", "b", {Price})"#,
+            "SEARCH needs a number as argument 3",
+        ),
+        (
+            "VALUE({Due})",
+            "VALUE needs a number as argument 1, not a date",
+        ),
+        (
+            r#"TEXT({Title}, "0")"#,
+            "TEXT formats numbers, amounts and dates, not text",
+        ),
         (r#"TEXT({Effort}, "0")"#, "not a duration"),
         (r#"TEXT({Tags}, "0")"#, "not a list"),
         (r#"TEXT({Done}, "0")"#, "not true/false"),
         (r#"TEXT({Status}, "0")"#, "not a reference"),
-        ("DATE({Due}, 1, 1)", "DATE needs a number as argument 1, not a date"),
+        (
+            "DATE({Due}, 1, 1)",
+            "DATE needs a number as argument 1, not a date",
+        ),
         ("DATE(2026, {Due}, 1)", "DATE needs a number as argument 2"),
         ("DATE(2026, 1, {Due})", "DATE needs a number as argument 3"),
-        ("YEAR({Qty})", "YEAR needs a date as argument 1, not a number"),
-        ("MONTH({Price})", "MONTH needs a date as argument 1, not an amount"),
+        (
+            "YEAR({Qty})",
+            "YEAR needs a date as argument 1, not a number",
+        ),
+        (
+            "MONTH({Price})",
+            "MONTH needs a date as argument 1, not an amount",
+        ),
         ("DAY({Tags})", "DAY needs a date as argument 1, not a list"),
-        ("HOUR({Effort})", "HOUR needs a date as argument 1, not a duration"),
-        ("MINUTE({Done})", "MINUTE needs a date as argument 1, not true/false"),
+        (
+            "HOUR({Effort})",
+            "HOUR needs a date as argument 1, not a duration",
+        ),
+        (
+            "MINUTE({Done})",
+            "MINUTE needs a date as argument 1, not true/false",
+        ),
         ("WEEKDAY({Qty})", "WEEKDAY needs a date as argument 1"),
-        ("WEEKDAY({Due}, {Due})", "WEEKDAY needs a number as argument 2"),
-        ("ISOWEEKNUM({Status})", "ISOWEEKNUM needs a date as argument 1, not a reference"),
-        (r#"DATEDIF({Qty}, {Due}, "d")"#, "DATEDIF needs a date as argument 1"),
-        (r#"DATEDIF({Due}, {Qty}, "d")"#, "DATEDIF needs a date as argument 2"),
-        (r#"DATEDIF({Due}, {Due}, "weeks")"#, r#"DATEDIF does not know the unit "weeks"; use one of: d, m, y"#),
-        (r#"DATEADD({Due}, 1, "hour")"#, r#"DATEADD does not know the unit "hour""#),
-        (r#"DATEADD({Qty}, 1, "day")"#, "DATEADD needs a date as argument 1, not a number"),
-        (r#"DATEADD({Tags}, 1, "day")"#, "DATEADD needs a date as argument 1, not a list"),
-        (r#"DATEADD({Due}, {Due}, "day")"#, "DATEADD needs a number as argument 2"),
+        (
+            "WEEKDAY({Due}, {Due})",
+            "WEEKDAY needs a number as argument 2",
+        ),
+        (
+            "ISOWEEKNUM({Status})",
+            "ISOWEEKNUM needs a date as argument 1, not a reference",
+        ),
+        (
+            r#"DATEDIF({Qty}, {Due}, "d")"#,
+            "DATEDIF needs a date as argument 1",
+        ),
+        (
+            r#"DATEDIF({Due}, {Qty}, "d")"#,
+            "DATEDIF needs a date as argument 2",
+        ),
+        (
+            r#"DATEDIF({Due}, {Due}, "weeks")"#,
+            r#"DATEDIF does not know the unit "weeks"; use one of: d, m, y"#,
+        ),
+        (
+            r#"DATEADD({Due}, 1, "hour")"#,
+            r#"DATEADD does not know the unit "hour""#,
+        ),
+        (
+            r#"DATEADD({Qty}, 1, "day")"#,
+            "DATEADD needs a date as argument 1, not a number",
+        ),
+        (
+            r#"DATEADD({Tags}, 1, "day")"#,
+            "DATEADD needs a date as argument 1, not a list",
+        ),
+        (
+            r#"DATEADD({Due}, {Due}, "day")"#,
+            "DATEADD needs a number as argument 2",
+        ),
         ("EDATE({Qty}, 1)", "EDATE needs a date as argument 1"),
-        ("EOMONTH({Due}, {Due})", "EOMONTH needs a number as argument 2"),
+        (
+            "EOMONTH({Due}, {Due})",
+            "EOMONTH needs a number as argument 2",
+        ),
         ("WORKDAY({Price}, 1)", "WORKDAY needs a date as argument 1"),
         ("DAYS({Qty}, {Due})", "DAYS needs a date as argument 1"),
-        ("NETWORKDAYS({Due}, {Status})", "NETWORKDAYS needs a date as argument 2"),
+        (
+            "NETWORKDAYS({Due}, {Status})",
+            "NETWORKDAYS needs a date as argument 2",
+        ),
         ("DURATION({Due})", "DURATION needs a number as argument 1"),
-        ("DURATION(1, {Due})", "DURATION needs a number as argument 2"),
-        ("DURATION(1, 2, {Due})", "DURATION needs a number as argument 3"),
-        ("TO_HOURS({Qty})", "TO_HOURS needs a duration as argument 1, not a number"),
-        ("TO_DAYS({Due})", "TO_DAYS needs a duration as argument 1, not a date"),
+        (
+            "DURATION(1, {Due})",
+            "DURATION needs a number as argument 2",
+        ),
+        (
+            "DURATION(1, 2, {Due})",
+            "DURATION needs a number as argument 3",
+        ),
+        (
+            "TO_HOURS({Qty})",
+            "TO_HOURS needs a duration as argument 1, not a number",
+        ),
+        (
+            "TO_DAYS({Due})",
+            "TO_DAYS needs a duration as argument 1, not a date",
+        ),
         ("INDEX({Tags}, {Due})", "INDEX needs a number as argument 2"),
         ("LABEL({Qty})", "LABEL needs a reference, not a number"),
         ("CODE({Lines}.{Qty})", "CODE needs a reference, not a list"),
         (r#"ATTR({Title}, "x")"#, "ATTR needs a reference, not text"),
-        (r#"ATTR({Lines}.{Qty}, "x")"#, "ATTR needs a reference, not a list"),
+        (
+            r#"ATTR({Lines}.{Qty}, "x")"#,
+            "ATTR needs a reference, not a list",
+        ),
         (r#"PARAM("")"#, "PARAM needs the key of a parameter"),
         (r#"PARAM("  ")"#, "PARAM needs the key of a parameter"),
     ]);
@@ -491,9 +728,18 @@ fn invalid_arguments() {
 fn anomalous_trees_that_did_not_come_from_the_parser() {
     let unknown = |name: String| Err(FormulaError::UnknownField { name, position: 0 });
     // A field that was deleted after the formula was written.
-    assert_eq!(check(&Expr::Field(fid(999)), &Orders), unknown(fid(999).to_string()));
-    let through = |link: u128, field: u128| Expr::Through { link: fid(link), field: fid(field) };
-    assert_eq!(check(&through(999, LINE_QTY), &Orders), unknown(fid(999).to_string()));
+    assert_eq!(
+        check(&Expr::Field(fid(999)), &Orders),
+        unknown(fid(999).to_string())
+    );
+    let through = |link: u128, field: u128| Expr::Through {
+        link: fid(link),
+        field: fid(field),
+    };
+    assert_eq!(
+        check(&through(999, LINE_QTY), &Orders),
+        unknown(fid(999).to_string())
+    );
     assert_eq!(
         check(&through(LINES, 999), &Orders),
         unknown(format!("{}.{}", fid(LINES), fid(999)))
@@ -501,7 +747,10 @@ fn anomalous_trees_that_did_not_come_from_the_parser() {
     // A field that is no longer a link.
     match check(&through(QTY, LINE_QTY), &Orders) {
         Err(FormulaError::Type(message)) => {
-            assert!(message.contains("only a link field leads to another table"), "{message}");
+            assert!(
+                message.contains("only a link field leads to another table"),
+                "{message}"
+            );
             assert!(message.ends_with("is a number field"), "{message}");
         }
         other => panic!("{other:?}"),
@@ -513,7 +762,11 @@ fn anomalous_trees_that_did_not_come_from_the_parser() {
     };
     assert!(matches!(
         check(&call(Function::Logic(LogicFn::If), 1), &Orders),
-        Err(FormulaError::Arity { function: "IF", found: 1, .. })
+        Err(FormulaError::Arity {
+            function: "IF",
+            found: 1,
+            ..
+        })
     ));
     assert_eq!(
         check(&call(Function::Number(NumberFn::Sum), 2_001), &Orders),
@@ -521,19 +774,37 @@ fn anomalous_trees_that_did_not_come_from_the_parser() {
     );
     let mut deep = Expr::Field(fid(QTY));
     for _ in 0..70 {
-        deep = Expr::Unary { op: UnaryOp::Negate, operand: Box::new(deep) };
+        deep = Expr::Unary {
+            op: UnaryOp::Negate,
+            operand: Box::new(deep),
+        };
     }
-    assert_eq!(check(&deep, &Orders), Err(FormulaError::Limit("nested more than 64 levels deep")));
+    assert_eq!(
+        check(&deep, &Orders),
+        Err(FormulaError::Limit("nested more than 64 levels deep"))
+    );
     assert_eq!(
         check_for_field(&deep, &Orders, DataType::Number),
         Err(FormulaError::Limit("nested more than 64 levels deep"))
     );
     // Errors inside arguments are found wherever they are.
     refused(&[
-        ("IF({Done}, {Price} + 1, 2)", "cannot combine an amount and a number"),
-        ("SUM({Qty}, LEN({Due} * 2))", "cannot combine a date and a number"),
-        ("COUNTIF({Lines}.{Qty}, CurrentValue > {Tags})", "cannot compare a list"),
-        (r#""x" & ({Status} + 1)"#, "cannot combine a reference and a number"),
+        (
+            "IF({Done}, {Price} + 1, 2)",
+            "cannot combine an amount and a number",
+        ),
+        (
+            "SUM({Qty}, LEN({Due} * 2))",
+            "cannot combine a date and a number",
+        ),
+        (
+            "COUNTIF({Lines}.{Qty}, CurrentValue > {Tags})",
+            "cannot compare a list",
+        ),
+        (
+            r#""x" & ({Status} + 1)"#,
+            "cannot combine a reference and a number",
+        ),
         ("NOT(-{Due} = 1)", "cannot negate a date"),
     ]);
 }
@@ -571,52 +842,132 @@ fn std_results_must_fit_the_field() {
         ("IF({Done}, {Due})", DataType::Date),
         ("IFERROR({Price} / {Qty}, {Price})", DataType::Money),
         ("IFS({Qty} > 5, 1, {Qty} > 2, 2, TRUE, 3)", DataType::Number),
-        ("SWITCH({Qty}, 1, {Due}, 2, {Due} + 1, TODAY())", DataType::Date),
+        (
+            "SWITCH({Qty}, 1, {Due}, 2, {Due} + 1, TODAY())",
+            DataType::Date,
+        ),
         ("IFBLANK({Due}, TODAY())", DataType::Date),
-        ("IF({Done}, IF({Qty} > 1, 1, 2), IFERROR(3 / {Qty}, 0))", DataType::Number),
+        (
+            "IF({Done}, IF({Qty} > 1, 1, 2), IFERROR(3 / {Qty}, 0))",
+            DataType::Number,
+        ),
     ];
     for (source, field) in fits {
-        assert!(for_field(source, *field).is_ok(), "{source} for {field:?}: {:?}", for_field(source, *field));
+        assert!(
+            for_field(source, *field).is_ok(),
+            "{source} for {field:?}: {:?}",
+            for_field(source, *field)
+        );
     }
     // The type is reported as by `check`.
     assert_eq!(for_field("{Qty} * 2", DataType::Text), Ok(Type::Number));
-    assert_eq!(for_field(r#"IF({Qty} = 0, "n/a", {Qty})"#, DataType::Text), Ok(Type::Any));
+    assert_eq!(
+        for_field(r#"IF({Qty} = 0, "n/a", {Qty})"#, DataType::Text),
+        Ok(Type::Any)
+    );
 }
 
 #[test]
 fn invalid_results_for_the_field() {
     let cases: &[(&str, DataType, &str)] = &[
-        ("{Qty}", DataType::Money, "the formula can return a number, but the field is a money field"),
-        ("{Due}", DataType::Number, "can return a date, but the field is a number field"),
-        ("{Price}", DataType::Percent, "can return an amount, but the field is a percent field"),
+        (
+            "{Qty}",
+            DataType::Money,
+            "the formula can return a number, but the field is a money field",
+        ),
+        (
+            "{Due}",
+            DataType::Number,
+            "can return a date, but the field is a number field",
+        ),
+        (
+            "{Price}",
+            DataType::Percent,
+            "can return an amount, but the field is a percent field",
+        ),
         ("{Qty}", DataType::Bool, "can return a number"),
-        ("{Created}", DataType::Date, "can return a date and time, but the field is a date field"),
+        (
+            "{Created}",
+            DataType::Date,
+            "can return a date and time, but the field is a date field",
+        ),
         ("{Due}", DataType::DateTime, "can return a date"),
         ("{Qty}", DataType::Duration, "can return a number"),
         ("{Title}", DataType::Reference, "can return text"),
         ("{Tags}", DataType::Reference, "can return a list"),
-        ("{Lines}.{Qty}", DataType::MultiReference, "can return a list"),
+        (
+            "{Lines}.{Qty}",
+            DataType::MultiReference,
+            "can return a list",
+        ),
         ("{Qty}", DataType::MultiReference, "can return a number"),
         // One alternative that does not fit is enough: those records would show an error.
-        (r#"IF({Qty} = 0, "n/a", {Qty})"#, DataType::Number, "can return text, but the field is a number field"),
-        (r#"IFERROR({Qty} / 2, "error")"#, DataType::Number, "can return text"),
-        ("IFS({Done}, 1, TRUE, {Due})", DataType::Number, "can return a date"),
-        ("SWITCH({Qty}, 1, {Price}, 2, {Qty})", DataType::Money, "can return a number"),
-        ("SWITCH({Qty}, 1, {Price}, {Qty})", DataType::Money, "can return a number"),
-        (r#"IF({Done}, IF({Qty} > 1, 1, "x"), 2)"#, DataType::Number, "can return text"),
+        (
+            r#"IF({Qty} = 0, "n/a", {Qty})"#,
+            DataType::Number,
+            "can return text, but the field is a number field",
+        ),
+        (
+            r#"IFERROR({Qty} / 2, "error")"#,
+            DataType::Number,
+            "can return text",
+        ),
+        (
+            "IFS({Done}, 1, TRUE, {Due})",
+            DataType::Number,
+            "can return a date",
+        ),
+        (
+            "SWITCH({Qty}, 1, {Price}, 2, {Qty})",
+            DataType::Money,
+            "can return a number",
+        ),
+        (
+            "SWITCH({Qty}, 1, {Price}, {Qty})",
+            DataType::Money,
+            "can return a number",
+        ),
+        (
+            r#"IF({Done}, IF({Qty} > 1, 1, "x"), 2)"#,
+            DataType::Number,
+            "can return text",
+        ),
         ("IFBLANK({Title}, 0)", DataType::Number, "can return text"),
         // What a computed field can never be.
-        ("{Qty}", DataType::Link, "a computed field cannot be a link field"),
-        ("{Owner}", DataType::Principal, "a computed field cannot be a principal field"),
-        ("{Files}", DataType::Attachment, "a computed field cannot be a attachment field"),
-        ("{Extra}", DataType::Json, "a computed field cannot be a json field"),
+        (
+            "{Qty}",
+            DataType::Link,
+            "a computed field cannot be a link field",
+        ),
+        (
+            "{Owner}",
+            DataType::Principal,
+            "a computed field cannot be a principal field",
+        ),
+        (
+            "{Files}",
+            DataType::Attachment,
+            "a computed field cannot be a attachment field",
+        ),
+        (
+            "{Extra}",
+            DataType::Json,
+            "a computed field cannot be a json field",
+        ),
         // Problems inside the formula come first.
-        ("{Price} + 1", DataType::Text, "cannot combine an amount and a number"),
+        (
+            "{Price} + 1",
+            DataType::Text,
+            "cannot combine an amount and a number",
+        ),
     ];
     for (source, field, needle) in cases {
         match for_field(source, *field) {
             Err(FormulaError::Type(message)) => {
-                assert!(message.contains(needle), "{source} for {field:?}: {message}");
+                assert!(
+                    message.contains(needle),
+                    "{source} for {field:?}: {message}"
+                );
             }
             other => panic!("{source} for {field:?}: {other:?}"),
         }
@@ -628,7 +979,16 @@ fn std_error_values_and_messages() {
     let codes: Vec<&str> = ErrorValue::ALL.iter().map(|error| error.code()).collect();
     assert_eq!(
         codes,
-        ["#DIV/0!", "#VALUE!", "#REF!", "#NUM!", "#CURRENCY!", "#N/A", "#LIMIT!", "#CYCLE!"]
+        [
+            "#DIV/0!",
+            "#VALUE!",
+            "#REF!",
+            "#NUM!",
+            "#CURRENCY!",
+            "#N/A",
+            "#LIMIT!",
+            "#CYCLE!"
+        ]
     );
     for error in ErrorValue::ALL.iter().copied() {
         assert_eq!(error.to_string(), error.code());
@@ -640,12 +1000,18 @@ fn std_error_values_and_messages() {
     }
     assert!(serde_json::from_str::<ErrorValue>("\"#NOPE!\"").is_err());
     assert_eq!(
-        FormulaError::Cycle { path: "A → B → A".into() }.to_string(),
+        FormulaError::Cycle {
+            path: "A → B → A".into()
+        }
+        .to_string(),
         "circular reference: A → B → A"
     );
     assert_eq!(
         FormulaError::Limit("more than 2,000 parts").to_string(),
         "the formula is too large: more than 2,000 parts"
     );
-    assert_eq!(FormulaError::Type("x cannot be y".into()).to_string(), "x cannot be y");
+    assert_eq!(
+        FormulaError::Type("x cannot be y".into()).to_string(),
+        "x cannot be y"
+    );
 }

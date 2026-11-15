@@ -152,18 +152,18 @@ fn mismatch(message: String) -> FormulaError {
 }
 
 /// The common type of two alternatives (the branches of an `IF`): the type both have, or
-/// [`Type::Any`] when they differ. A value of unknown kind is assumed to fit the other.
+/// [`Type::Any`] when they differ or one of them is not known.
 fn unify(a: Type, b: Type) -> Type {
     match (a, b) {
-        (Type::Any, other) | (other, Type::Any) => other,
         (Type::List(a), Type::List(b)) => Type::List(Box::new(unify(*a, *b))),
         (a, b) if a == b => a,
         _ => Type::Any,
     }
 }
 
+/// The common type of several alternatives; unknown when there is none.
 fn unify_all(types: impl IntoIterator<Item = Type>) -> Type {
-    types.into_iter().fold(Type::Any, unify)
+    types.into_iter().reduce(unify).unwrap_or(Type::Any)
 }
 
 /// The result type of an arithmetic operator. Where an operand of unknown kind leaves more
@@ -390,6 +390,23 @@ fn alternatives(function: LogicFn, args: &[Expr]) -> Vec<&Expr> {
     }
 }
 
+/// Whether an expression can only ever be empty: `BLANK()`, or a choice between such.
+/// An empty alternative says nothing about the kind of the others.
+fn is_nothing(expr: &Expr) -> bool {
+    let Expr::Call {
+        function: Function::Logic(function),
+        args,
+    } = expr
+    else {
+        return false;
+    };
+    if *function == LogicFn::Blank {
+        return true;
+    }
+    let alternatives = alternatives(*function, args);
+    !alternatives.is_empty() && alternatives.into_iter().all(is_nothing)
+}
+
 /// The expressions whose value the formula can return: the formula itself, or the
 /// alternatives of the `IF`, `IFS`, `SWITCH`, `IFERROR` or `IFBLANK` at its top.
 fn outcomes<'e>(expr: &'e Expr, out: &mut Vec<&'e Expr>) {
@@ -537,7 +554,11 @@ impl Checker<'_> {
         let condition = |index: usize| need(index, "a condition", Type::condition_like);
         match function {
             Function::Logic(function) => match function {
-                LogicFn::If | LogicFn::Ifs | LogicFn::Switch | LogicFn::IfError | LogicFn::IfBlank => {
+                LogicFn::If
+                | LogicFn::Ifs
+                | LogicFn::Switch
+                | LogicFn::IfError
+                | LogicFn::IfBlank => {
                     match function {
                         LogicFn::If => condition(0)?,
                         LogicFn::Ifs => {
@@ -558,9 +579,13 @@ impl Checker<'_> {
                         | LogicFn::IsText
                         | LogicFn::Blank => {}
                     }
+                    // The arguments were all checked above; here only the possible
+                    // results count, and an empty one fits any kind.
                     let mut results = Vec::new();
                     for alternative in alternatives(function, args) {
-                        results.push(self.infer(alternative, in_condition)?);
+                        if !is_nothing(alternative) {
+                            results.push(self.infer(alternative, in_condition)?);
+                        }
                     }
                     Ok(unify_all(results))
                 }
@@ -619,9 +644,11 @@ impl Checker<'_> {
                 }
             },
             Function::Text(function) => match function {
-                TextFn::Concat | TextFn::TextJoin | TextFn::Upper | TextFn::Lower | TextFn::Trim => {
-                    Ok(Type::Text)
-                }
+                TextFn::Concat
+                | TextFn::TextJoin
+                | TextFn::Upper
+                | TextFn::Lower
+                | TextFn::Trim => Ok(Type::Text),
                 TextFn::Left | TextFn::Right | TextFn::Rept => {
                     number(1)?;
                     Ok(Type::Text)
@@ -733,9 +760,7 @@ impl Checker<'_> {
                         Ok(Type::Number)
                     }
                     DateFn::ToHours | DateFn::ToDays => {
-                        need(0, "a duration", |t| {
-                            matches!(t, Type::Duration | Type::Any)
-                        })?;
+                        need(0, "a duration", |t| matches!(t, Type::Duration | Type::Any))?;
                         Ok(Type::Number)
                     }
                     DateFn::Duration => {

@@ -74,7 +74,10 @@ pub fn day(y: i32, m: u32, d: u32) -> Date {
 }
 
 pub fn at(y: i32, m: u32, d: u32, hour: i64, minute: i64) -> Timestamp {
-    Timestamp::from_millis(day(y, m, d).to_timestamp().millis() + hour * 3_600_000 + minute * 60_000).unwrap()
+    Timestamp::from_millis(
+        day(y, m, d).to_timestamp().millis() + hour * 3_600_000 + minute * 60_000,
+    )
+    .unwrap()
 }
 
 const ORDER_FIELDS: &[(u128, &str, DataType)] = &[
@@ -144,11 +147,15 @@ impl Schema for Orders {
     }
 
     fn linked_field_by_name(&self, link: FieldId, name: &str) -> Option<FieldId> {
-        (link == fid(LINES)).then(|| by_name(LINE_FIELDS, name)).flatten()
+        (link == fid(LINES))
+            .then(|| by_name(LINE_FIELDS, name))
+            .flatten()
     }
 
     fn linked_field_type(&self, link: FieldId, field: FieldId) -> Option<DataType> {
-        (link == fid(LINES)).then(|| type_in(LINE_FIELDS, field)).flatten()
+        (link == fid(LINES))
+            .then(|| type_in(LINE_FIELDS, field))
+            .flatten()
     }
 }
 
@@ -158,7 +165,9 @@ impl Names for Orders {
     }
 
     fn linked_field(&self, link: FieldId, field: FieldId) -> Option<String> {
-        (link == fid(LINES)).then(|| name_in(LINE_FIELDS, field)).flatten()
+        (link == fid(LINES))
+            .then(|| name_in(LINE_FIELDS, field))
+            .flatten()
     }
 }
 
@@ -209,7 +218,14 @@ pub fn order() -> Rec {
         (DONE, Value::Bool(false)),
         (STATUS, Value::Reference(item(1))),
         (TAGS, Value::MultiReference(vec![item(1), item(2)])),
-        (LINES, Value::Link(vec![RecordId::from_u128(1), RecordId::from_u128(2), RecordId::from_u128(3)])),
+        (
+            LINES,
+            Value::Link(vec![
+                RecordId::from_u128(1),
+                RecordId::from_u128(2),
+                RecordId::from_u128(3),
+            ]),
+        ),
         (EFFORT, Value::Duration(DurationMs::from_millis(5_400_000))),
         (NOTES, Value::LongText("Fragile.\nHandle with care".into())),
         (OWNER, Value::Principal(vec![PrincipalId::from_u128(7)])),
@@ -221,12 +237,43 @@ pub fn order() -> Rec {
         rec.cells.insert(fid(field), value);
     }
     let linked = [
-        (LINE_AMOUNT, vec![money("10.00", "USD"), money("25.50", "USD"), money("4.25", "USD")]),
+        (
+            LINE_AMOUNT,
+            vec![
+                money("10.00", "USD"),
+                money("25.50", "USD"),
+                money("4.25", "USD"),
+            ],
+        ),
         (LINE_QTY, vec![num("1"), num("2"), Value::Null]),
-        (LINE_NAME, vec![Value::Text("Bolt".into()), Value::Text("nut".into()), Value::Text("Washer".into())]),
-        (LINE_SHIPPED, vec![Value::Date(day(2026, 5, 3)), Value::Null, Value::Date(day(2026, 5, 10))]),
-        (LINE_LABELS, vec![Value::MultiReference(vec![item(1)]), Value::MultiReference(vec![]), Value::MultiReference(vec![item(2), item(1)])]),
-        (LINE_DONE, vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)]),
+        (
+            LINE_NAME,
+            vec![
+                Value::Text("Bolt".into()),
+                Value::Text("nut".into()),
+                Value::Text("Washer".into()),
+            ],
+        ),
+        (
+            LINE_SHIPPED,
+            vec![
+                Value::Date(day(2026, 5, 3)),
+                Value::Null,
+                Value::Date(day(2026, 5, 10)),
+            ],
+        ),
+        (
+            LINE_LABELS,
+            vec![
+                Value::MultiReference(vec![item(1)]),
+                Value::MultiReference(vec![]),
+                Value::MultiReference(vec![item(2), item(1)]),
+            ],
+        ),
+        (
+            LINE_DONE,
+            vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)],
+        ),
     ];
     for (field, values) in linked {
         rec.linked.insert((fid(LINES), fid(field)), values);
@@ -244,10 +291,22 @@ pub struct World {
     pub idle: bool,
 }
 
-pub const UTC: World = World { hours_ahead: 0, idle: false };
-pub const TOKYO: World = World { hours_ahead: 9, idle: false };
-pub const LOS_ANGELES: World = World { hours_ahead: -7, idle: false };
-pub const IDLE: World = World { hours_ahead: 0, idle: true };
+pub const UTC: World = World {
+    hours_ahead: 0,
+    idle: false,
+};
+pub const TOKYO: World = World {
+    hours_ahead: 9,
+    idle: false,
+};
+pub const LOS_ANGELES: World = World {
+    hours_ahead: -7,
+    idle: false,
+};
+pub const IDLE: World = World {
+    hours_ahead: 0,
+    idle: true,
+};
 
 impl Env for World {
     fn today(&self) -> Date {
@@ -316,10 +375,17 @@ pub fn show(value: &Val) -> String {
         Val::DateTime(t) => t.to_string(),
         Val::Duration(d) => format!("{}ms", d.millis()),
         Val::Money(amount, currency) => {
-            format!("{} {}", canonical_string(&Rounding::HalfEven.round(*amount, 6)), currency.code())
+            format!(
+                "{} {}",
+                canonical_string(&Rounding::HalfEven.round(*amount, 6)),
+                currency.code()
+            )
         }
         Val::Ref(item) => format!("ref:{}", item.as_u128()),
-        Val::List(items) => format!("[{}]", items.iter().map(show).collect::<Vec<_>>().join(", ")),
+        Val::List(items) => format!(
+            "[{}]",
+            items.iter().map(show).collect::<Vec<_>>().join(", ")
+        ),
         Val::Error(error) => error.code().to_owned(),
     }
 }

@@ -27,7 +27,10 @@ fn std_totals_of_values() {
         ("AVERAGE({Lines}.{Amount})", "13.25 USD"),
         ("AVERAGE({Lines}.{Qty})", "1.5"),
         ("AVERAGE({Effort}, DURATION(0, 30))", "3600000ms"),
-        ("AVERAGE(DURATION(0, 0, 0.001), DURATION(0, 0, 0.002))", "2ms"),
+        (
+            "AVERAGE(DURATION(0, 0, 0.001), DURATION(0, 0, 0.002))",
+            "2ms",
+        ),
         ("MEDIAN(3, 1, 2)", "2"),
         ("MEDIAN(4, 1, 3, 2)", "2.5"),
         ("MEDIAN(5)", "5"),
@@ -46,7 +49,10 @@ fn std_totals_of_values() {
         ("MAX({Effort}, DURATION(1))", "5400000ms"),
         ("COUNT({Lines}.{Qty})", "2"),
         ("COUNT({Lines}.{Name})", "0"),
-        (r#"COUNT(1, "a", {Due}, {Price}, {Effort}, {Created}, TRUE)"#, "5"),
+        (
+            r#"COUNT(1, "a", {Due}, {Price}, {Effort}, {Created}, TRUE)"#,
+            "5",
+        ),
         ("COUNT({Lines})", "0"),
         ("COUNTA({Lines}.{Qty})", "2"),
         ("COUNTA({Lines}.{Name})", "3"),
@@ -96,7 +102,10 @@ fn invalid_totals_of_mixed_kinds() {
         ("MAX({Due}, {Created})", "#VALUE!"),
         ("MIN({Created}, {Due})", "#VALUE!"),
         ("SUM(79228162514264337593543950335, 1)", "#NUM!"),
-        ("AVERAGE(79228162514264337593543950335, 79228162514264337593543950335)", "#NUM!"),
+        (
+            "AVERAGE(79228162514264337593543950335, 79228162514264337593543950335)",
+            "#NUM!",
+        ),
     ]);
 }
 
@@ -211,12 +220,18 @@ fn std_text_functions() {
         ("CONCAT({Lines}.{Name})", r#""BoltnutWasher""#),
         (r#"CONCAT({Status}, "-", {Tags})"#, r#""Open-OpenClosed""#),
         (r#"CONCAT({Empty number})"#, r#""""#),
-        (r#"TEXTJOIN(", ", TRUE, {Lines}.{Name})"#, r#""Bolt, nut, Washer""#),
+        (
+            r#"TEXTJOIN(", ", TRUE, {Lines}.{Name})"#,
+            r#""Bolt, nut, Washer""#,
+        ),
         (r#"TEXTJOIN("-", TRUE, {Lines}.{Qty})"#, r#""1-2""#),
         (r#"TEXTJOIN("-", FALSE, {Lines}.{Qty})"#, r#""1-2-""#),
         (r#"TEXTJOIN("/", TRUE, "a", "", "b")"#, r#""a/b""#),
         (r#"TEXTJOIN(", ", TRUE, {Tags})"#, r#""Open, Closed""#),
-        (r#"TEXTJOIN(" + ", TRUE, {Lines}.{Amount})"#, r#""10.00 USD + 25.50 USD + 4.25 USD""#),
+        (
+            r#"TEXTJOIN(" + ", TRUE, {Lines}.{Amount})"#,
+            r#""10.00 USD + 25.50 USD + 4.25 USD""#,
+        ),
         (r#"TEXTJOIN("", TRUE, {Empty number})"#, r#""""#),
         ("LEN({Title})", "12"),
         (r#"LEN("")"#, "0"),
@@ -306,7 +321,10 @@ fn invalid_text_arguments() {
         (r#"VALUE("abc")"#, "#VALUE!"),
         ("VALUE({Due})", "#VALUE!"),
         (r#"TEXTJOIN("", "x", "a")"#, "#VALUE!"),
-        (r#"CONTAINS({Lines}.{Amount}, PARAM("ship.eur"))"#, "#CURRENCY!"),
+        (
+            r#"CONTAINS({Lines}.{Amount}, PARAM("ship.eur"))"#,
+            "#CURRENCY!",
+        ),
         // Errors inside a list argument are found.
         ("CONCAT({Lines}.{Qty}, 1 / 0)", "#DIV/0!"),
     ]);
@@ -337,7 +355,10 @@ fn std_text_of_numbers() {
         (r#"TEXT({Price}, "0.0")"#, r#""20.0""#),
         (r##"TEXT({Price} * {Qty}, "#,##0.00")"##, r#""59.97""#),
         (r#"TEXT({Empty number}, "0.00")"#, r#""""#),
-        (r##""Total: " & TEXT({Price} * 1000, "#,##0.00") & " USD""##, r#""Total: 19,990.00 USD""#),
+        (
+            r##""Total: " & TEXT({Price} * 1000, "#,##0.00") & " USD""##,
+            r#""Total: 19,990.00 USD""#,
+        ),
     ]);
 }
 
@@ -346,7 +367,10 @@ fn std_text_of_dates() {
     check(&[
         (r#"TEXT({Due}, "yyyy-mm-dd")"#, r#""2026-05-20""#),
         (r#"TEXT({Due}, "d mmm yyyy")"#, r#""20 May 2026""#),
-        (r#"TEXT({Due}, "dddd, mmmm d, yy")"#, r#""Wednesday, May 20, 26""#),
+        (
+            r#"TEXT({Due}, "dddd, mmmm d, yy")"#,
+            r#""Wednesday, May 20, 26""#,
+        ),
         (r#"TEXT({Due}, "ddd")"#, r#""Wed""#),
         (r#"TEXT({Due}, "DD/MM/YYYY")"#, r#""20/05/2026""#),
         (r#"TEXT({Due}, "m/d/yy")"#, r#""5/20/26""#),
@@ -355,15 +379,24 @@ fn std_text_of_dates() {
         (r#"TEXT(DATE(2026, 9, 5), "mmmmm")"#, r#""September""#),
         (r#"TEXT(DATE(2026, 9, 6), "ddddd")"#, r#""Sunday""#),
         (r#"TEXT({Due}, "hh:mm")"#, r#""00:00""#),
-        (r#"TEXT({Created}, "yyyy-mm-dd hh:mm:ss")"#, r#""2026-05-01 08:15:00""#),
+        (
+            r#"TEXT({Created}, "yyyy-mm-dd hh:mm:ss")"#,
+            r#""2026-05-01 08:15:00""#,
+        ),
         (r#"TEXT({Created}, "h:m")"#, r#""8:15""#),
         // `mm` next to hours or seconds is minutes; anywhere else it is the month.
         (r#"TEXT({Created}, "mm:ss")"#, r#""15:00""#),
         (r#"TEXT({Created}, "mm")"#, r#""05""#),
         (r#"TEXT({Created}, "hh mm, mm dd")"#, r#""08 15, 05 01""#),
-        (r#"TEXT(NOW() + DURATION(0, 0, 7), "s") & TEXT(NOW() + DURATION(0, 0, 7), " ss")"#, r#""7 07""#),
+        (
+            r#"TEXT(NOW() + DURATION(0, 0, 7), "s") & TEXT(NOW() + DURATION(0, 0, 7), " ss")"#,
+            r#""7 07""#,
+        ),
         (r#"TEXT({Empty date}, "yyyy")"#, r#""""#),
-        (r#"TEXT(DATE(5, 3, 4), "yyyy-mm-dd / yy")"#, r#""0005-03-04 / 05""#),
+        (
+            r#"TEXT(DATE(5, 3, 4), "yyyy-mm-dd / yy")"#,
+            r#""0005-03-04 / 05""#,
+        ),
     ]);
 }
 
@@ -451,8 +484,14 @@ fn std_moving_and_measuring_dates() {
         (r#"DATEADD(DATE(2024, 2, 29), 1, "year")"#, "2025-02-28"),
         (r#"DATEADD(DATE(2024, 2, 29), 4, "years")"#, "2028-02-29"),
         // A date-time keeps its time of day.
-        (r#"DATEADD({Created}, 1, "day")"#, "2026-05-02T08:15:00.000Z"),
-        (r#"DATEADD({Created}, 1, "months")"#, "2026-06-01T08:15:00.000Z"),
+        (
+            r#"DATEADD({Created}, 1, "day")"#,
+            "2026-05-02T08:15:00.000Z",
+        ),
+        (
+            r#"DATEADD({Created}, 1, "months")"#,
+            "2026-06-01T08:15:00.000Z",
+        ),
         (r#"DATEADD("2026-05-20", 1, "days")"#, "2026-05-21"),
         ("EDATE({Due}, 1)", "2026-06-20"),
         ("EDATE({Due}, -5)", "2025-12-20"),
@@ -507,7 +546,10 @@ fn edge_date_functions_without_a_date_return_nothing() {
         (r#"DATEADD({Due}, {Empty number}, "day")"#, "2026-05-20"),
         ("EDATE({Due}, {Empty number})", "2026-05-20"),
         // A whole formula over an optional date stays empty without any IF.
-        (r#"IFBLANK(TEXT(EDATE({Empty date}, 6), "d mmm yyyy"), "not planned")"#, r#""not planned""#),
+        (
+            r#"IFBLANK(TEXT(EDATE({Empty date}, 6), "d mmm yyyy"), "not planned")"#,
+            r#""not planned""#,
+        ),
         ("YEAR({Empty date}) = 2026", "FALSE"),
     ]);
 }
@@ -619,7 +661,10 @@ fn edge_days_follow_the_time_zone() {
             ("HOUR({Created})", "17"),
             ("MINUTE({Created})", "15"),
             ("DAY({Created})", "1"),
-            (r#"TEXT({Created}, "yyyy-mm-dd hh:mm")"#, r#""2026-05-01 17:15""#),
+            (
+                r#"TEXT({Created}, "yyyy-mm-dd hh:mm")"#,
+                r#""2026-05-01 17:15""#,
+            ),
         ],
         &record,
         &TOKYO,
@@ -636,7 +681,8 @@ fn edge_days_follow_the_time_zone() {
 
     // 20:00 UTC on 30 April is already 1 May, 05:00, in Tokyo …
     let mut late = order();
-    late.cells.insert(fid(CREATED), Value::DateTime(at(2026, 4, 30, 20, 0)));
+    late.cells
+        .insert(fid(CREATED), Value::DateTime(at(2026, 4, 30, 20, 0)));
     check_in(
         &[
             ("DAY({Created})", "1"),
@@ -646,28 +692,43 @@ fn edge_days_follow_the_time_zone() {
             ("WEEKDAY({Created}, 2)", "5"),
             ("EOMONTH({Created}, 0)", "2026-05-31"),
             // Adding a month keeps the local time of day: 1 June, 05:00 in Tokyo.
-            (r#"DATEADD({Created}, 1, "month")"#, "2026-05-31T20:00:00.000Z"),
+            (
+                r#"DATEADD({Created}, 1, "month")"#,
+                "2026-05-31T20:00:00.000Z",
+            ),
             ("DAYS({Due}, {Created})", "19"),
         ],
         &late,
         &TOKYO,
     );
     check_in(
-        &[("DAY({Created})", "30"), ("MONTH({Created})", "4"), ("HOUR({Created})", "20")],
+        &[
+            ("DAY({Created})", "30"),
+            ("MONTH({Created})", "4"),
+            ("HOUR({Created})", "20"),
+        ],
         &late,
         &UTC,
     );
 
     // … and 03:00 UTC on 1 May is still 30 April, 20:00, in Los Angeles.
     let mut early = order();
-    early.cells.insert(fid(CREATED), Value::DateTime(at(2026, 5, 1, 3, 0)));
+    early
+        .cells
+        .insert(fid(CREATED), Value::DateTime(at(2026, 5, 1, 3, 0)));
     check_in(
         &[
             ("DAY({Created})", "30"),
             ("MONTH({Created})", "4"),
             ("HOUR({Created})", "20"),
-            (r#"TEXT({Created}, "yyyy-mm-dd hh:mm")"#, r#""2026-04-30 20:00""#),
-            (r#"DATEADD({Created}, 1, "day")"#, "2026-05-02T03:00:00.000Z"),
+            (
+                r#"TEXT({Created}, "yyyy-mm-dd hh:mm")"#,
+                r#""2026-04-30 20:00""#,
+            ),
+            (
+                r#"DATEADD({Created}, 1, "day")"#,
+                "2026-05-02T03:00:00.000Z",
+            ),
             ("EDATE({Created}, 1)", "2026-05-30"),
         ],
         &early,
@@ -693,18 +754,36 @@ fn std_values_of_linked_records() {
         ("COUNTIF({Empty number}, 0)", "0"),
         ("SUMIF({Lines}.{Qty}, CurrentValue > 0)", "3"),
         ("SUMIF({Lines}.{Done}, TRUE, {Lines}.{Amount})", "14.25 USD"),
-        ("SUMIF({Lines}.{Qty}, CurrentValue >= 2, {Lines}.{Amount})", "25.5 USD"),
+        (
+            "SUMIF({Lines}.{Qty}, CurrentValue >= 2, {Lines}.{Amount})",
+            "25.5 USD",
+        ),
         ("SUMIF({Lines}.{Qty}, CurrentValue > 5)", "0"),
-        ("AVERAGEIF({Lines}.{Amount}, CurrentValue > {Shipping})", "17.75 USD"),
-        ("AVERAGEIF({Lines}.{Done}, FALSE, {Lines}.{Amount})", "25.5 USD"),
+        (
+            "AVERAGEIF({Lines}.{Amount}, CurrentValue > {Shipping})",
+            "17.75 USD",
+        ),
+        (
+            "AVERAGEIF({Lines}.{Done}, FALSE, {Lines}.{Amount})",
+            "25.5 USD",
+        ),
         ("AVERAGEIF({Lines}.{Qty}, CurrentValue > 5)", "(blank)"),
-        (r#"FILTER({Lines}.{Name}, CurrentValue <> "nut")"#, r#"["Bolt", "Washer"]"#),
+        (
+            r#"FILTER({Lines}.{Name}, CurrentValue <> "nut")"#,
+            r#"["Bolt", "Washer"]"#,
+        ),
         ("FILTER({Lines}.{Qty}, CurrentValue > 5)", "[]"),
         // A condition without `CurrentValue` is a value to equal.
         ("FILTER({Lines}.{Done}, TRUE)", "[TRUE, TRUE]"),
         ("FILTER({Lines}.{Qty}, TRUE)", "[]"),
-        ("SUM(FILTER({Lines}.{Amount}, CurrentValue > {Shipping}))", "35.5 USD"),
-        (r#"TEXTJOIN(", ", TRUE, FILTER({Lines}.{Name}, LEN(CurrentValue) > 3))"#, r#""Bolt, Washer""#),
+        (
+            "SUM(FILTER({Lines}.{Amount}, CurrentValue > {Shipping}))",
+            "35.5 USD",
+        ),
+        (
+            r#"TEXTJOIN(", ", TRUE, FILTER({Lines}.{Name}, LEN(CurrentValue) > 3))"#,
+            r#""Bolt, Washer""#,
+        ),
         ("UNIQUE({Lines}.{Labels})", "[ref:1, ref:2]"),
         ("UNIQUE({Lines}.{Qty})", "[1, 2]"),
         ("UNIQUE({Qty})", "[3]"),
@@ -744,7 +823,10 @@ fn std_conditions_written_as_text() {
         (r#"COUNTIF({Lines}.{Qty}, "")"#, "1"),
         (r#"COUNTIF({Lines}.{Qty}, "=")"#, "1"),
         (r#"COUNTIF({Lines}.{Qty}, "<>")"#, "2"),
-        (r#"SUMIF({Lines}.{Qty}, ">1", {Lines}.{Amount})"#, "25.5 USD"),
+        (
+            r#"SUMIF({Lines}.{Qty}, ">1", {Lines}.{Amount})"#,
+            "25.5 USD",
+        ),
         (r#"FILTER({Lines}.{Qty}, ">=2")"#, "[2]"),
         // Items of a kind that cannot be compared with the operand do not match.
         (r#"COUNTIF({Lines}.{Name}, ">5")"#, "0"),
@@ -774,7 +856,10 @@ fn edge_the_current_item_belongs_to_the_innermost_list() {
     let mut record = order();
     record.linked.insert(
         (fid(LINES), fid(LINE_NAME)),
-        ["a", "A", "b", "", "B", "ß", "SS"].into_iter().map(|t| Value::Text(t.into())).collect(),
+        ["a", "A", "b", "", "B", "ß", "SS"]
+            .into_iter()
+            .map(|t| Value::Text(t.into()))
+            .collect(),
     );
     record.linked.insert(
         (fid(LINES), fid(LINE_QTY)),
@@ -819,8 +904,14 @@ fn invalid_list_arguments() {
         // The third argument must have one value per item.
         (r#"SUMIF({Lines}.{Qty}, ">0", {Tags})"#, "#VALUE!"),
         (r#"AVERAGEIF({Lines}.{Qty}, ">0", {Qty})"#, "#VALUE!"),
-        (r#"SUMIF({Lines}.{Qty}, ">0", {Lines}.{Shipped})"#, "#VALUE!"),
-        (r#"COUNTIF({Lines}.{Amount}, PARAM("ship.eur"))"#, "#CURRENCY!"),
+        (
+            r#"SUMIF({Lines}.{Qty}, ">0", {Lines}.{Shipped})"#,
+            "#VALUE!",
+        ),
+        (
+            r#"COUNTIF({Lines}.{Amount}, PARAM("ship.eur"))"#,
+            "#CURRENCY!",
+        ),
         ("COUNTIF({Lines}.{Qty}, {Tags})", "#VALUE!"),
     ]);
 }
