@@ -12,11 +12,12 @@ stand-in is replaced and the same binary, web app and end-to-end tests grow with
 | Grid: search, filter, sort, group, totals | `mt-query` | — |
 | Formulas, lookups, roll-ups across tables | `mt-formula` (full recompute after each change) | incremental recompute: `mt-ops` (wave 3) |
 | Who sees and changes what, and why | `mt-perm` (scopes, limits, field protection, masks, separation of duties, agents acting for people, explain) | — |
+| Lifecycles and approvals | `mt-lifecycle`: requests go draft → submitted → approved → ordered (or rejected, cancelled); submitting starts the purchase approval, routed by the access rules (whoever may approve the amount, never the requester; the CFO above 25,000); my tasks, approve / reject / send back / delegate, an in-app inbox; requests and their lines are locked while approved | SLA clocks on requests, approval designer: wave 5 |
 | Audit | `mt-audit` hash chain, verification, tamper simulation | — |
 | Storage | one JSON file, written atomically after each change | `mt-store`: SQLite/MySQL/PostgreSQL (wave 3) |
 | Identity | a user switcher (`x-user`, `x-on-behalf-of` headers) | `mt-identity` (wave 4) |
 | API | `/api/*`, JSON | versioned Public/Admin APIs with OpenAPI: `mt-api` (wave 4) |
-| Approvals, automations, notifications, dashboards, AI | placeholders in the web app | waves 2, 5, 6 |
+| Automations, email/chat notifications, dashboards, AI | placeholders in the web app | waves 5, 6 |
 
 ## Run
 
@@ -33,7 +34,8 @@ over with the demo), `--open` (open the browser). Debug builds read `apps/web/di
 | Module | Purpose |
 |---|---|
 | `model` | The workspace: tables, records, reference sets, people, policy, audit; create/update/delete and add-field operations, each checked, validated, recomputed and audited |
-| `seed` | The demo: suppliers, purchase requests, request lines; six people with different access; created through the real operations |
+| `seed` | The demo: suppliers, purchase requests, request lines; seven people with different access; the request lifecycle and purchase approval; records created, submitted and approved through the real operations |
+| `process` | Lifecycles bound to tables, transitions, approvals (start, act, finish → state), approvers from the access policy, locks on frozen records and their lines, notices, and the views of tasks, approvals and the process design |
 | `formula` | How formulas see tables, records, linked records and the environment |
 | `view` | Values as people read them; field descriptions; decisions explained |
 | `api` | The HTTP routes |
@@ -52,6 +54,12 @@ over with the demo), `--open` (open the browser). Debug builds read `apps/web/di
 
 ## Tests
 
-`tests/api.rs` — 19 in-process API tests (every endpoint, as different people). The browser
-walk-through in `apps/web/e2e` (Playwright, 14 steps with screenshots) runs against the release
-package in CI. Line coverage of this crate: 91 % from the API tests alone.
+`tests/api.rs` — 19 in-process API tests (every endpoint, as different people).
+`tests/process.rs` — 9 tests of lifecycles and approvals through the API: the seeded requests'
+history, submit → approve → order, the CFO step and sending back, rejection, revision,
+withdrawal, cancellation and deletion rules, every refused transition with its reasons, acts
+that are not allowed (someone else's task, an agent acting for the approver, unknown tasks,
+missing reasons), a request nobody may approve (stuck, admins told), locks on lines of frozen
+requests, and approvals surviving a restart.
+The browser walk-through in `apps/web/e2e` (Playwright, 21 steps with screenshots) runs against
+the release package in CI. Line coverage of this crate: 92 % from the API tests alone.

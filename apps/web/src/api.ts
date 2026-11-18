@@ -25,6 +25,7 @@ export type Column = {
   maxItems: number | null;
   visibility: "visible" | "masked" | "hidden" | null;
   editable: boolean;
+  lockedReason?: string;
   cell?: Cell;
 };
 
@@ -63,6 +64,41 @@ export type Explanation = {
   fields?: string[];
 };
 
+export type ApprovalTask = {
+  id: number;
+  step: string;
+  kind: "approve" | "fill_in";
+  assignee: string;
+  assigneeId: string;
+  status: string;
+  comment: string | null;
+  openedAt: number;
+  actedAt: number | null;
+  delegatedFrom: string | null;
+  mine: boolean;
+  canSendBack: boolean;
+};
+
+export type ApprovalRun = {
+  id: number;
+  status: string;
+  definition: string | null;
+  version: number;
+  requester: string;
+  startedAt: number;
+  endedAt: number | null;
+  tasks: ApprovalTask[];
+  history: { at: number; actor: string; what: string }[];
+};
+
+export type ProcessInfo = {
+  state: { key: string; name: string; category: string | null };
+  states: { key: string; name: string; category: string }[];
+  transitions: { key: string; name: string; to: string; allowed: boolean; reasons: string[]; startsApproval: boolean }[];
+  approval: ApprovalRun | null;
+  wouldAsk: { steps: { step: string; people: string[] }[]; outcome: string } | null;
+};
+
 export type RecordDetail = {
   id: string;
   title: string;
@@ -74,7 +110,72 @@ export type RecordDetail = {
   modifiedBy: string;
   modifiedAt: string;
   version: number;
+  process: ProcessInfo | null;
 };
+
+export type MyTask = {
+  run: number;
+  task: number;
+  kind: "approve" | "fill_in";
+  step: string;
+  table: string;
+  tableName: string | null;
+  record: string;
+  title: string;
+  requester: string;
+  total: string | null;
+  openedAt: number;
+  delegatedFrom: string | null;
+  canSendBack: boolean;
+};
+
+export type RunSummary = {
+  id: number;
+  table: string;
+  record: string;
+  title: string;
+  status: string;
+  requester: string;
+  waitingFor: string[];
+  startedAt: number;
+  endedAt: number | null;
+};
+
+export type Notice = { id: number; at: number; text: string; table: string; record: string };
+
+export type StepNode = {
+  kind: "approval" | "branch" | "parallel" | "fill_in" | "notify";
+  key: string;
+  name: string;
+  who?: string[];
+  mode?: string;
+  canSendBack?: boolean;
+  cases?: { name: string; then: StepNode[] }[];
+  otherwise?: StepNode[];
+  branches?: StepNode[][];
+  join?: string;
+  fields?: string[];
+};
+
+export type ProcessDefinitions = {
+  lifecycles: {
+    name: string;
+    table: string | null;
+    initial: string;
+    states: { key: string; name: string; category: string; required: string[]; frozen: boolean | null }[];
+    transitions: { key: string; name: string; from: string[]; to: string; who: string; approval: string | null }[];
+  }[];
+  approvals: { key: string; name: string; version: number; steps: StepNode[] }[];
+};
+
+export type Act =
+  | { act: "approve"; comment?: string }
+  | { act: "reject"; comment: string }
+  | { act: "return"; comment: string }
+  | { act: "submit" }
+  | { act: "delegate"; to: string }
+  | { act: "add_approver"; who: string }
+  | { act: "comment"; text: string };
 
 export type Person = { id: string; name: string; kind: string; title: string; members: string[] };
 export type TableSummary = { id: string; name: string; description: string; records: number; canRead: boolean };
@@ -143,4 +244,10 @@ export const api = {
     call<{ seq: number; hash: string; prev: string; actor: string; initiator: string; action: string; object: string; details: Record<string, unknown> | null; at: string }[]>("GET", "/api/audit"),
   verify: () => call<{ intact: boolean; entries?: number; head?: string; seq?: number; kind?: string; lastGood?: number }>("GET", "/api/audit/verify"),
   tamper: (seq: number) => call<{ intact: boolean; seq?: number; kind?: string; lastGood?: number }>("POST", "/api/audit/tamper-check", { seq }),
+  transition: (table: string, record: string, key: string) => call<RecordDetail>("POST", `/api/tables/${table}/records/${record}/transitions/${key}`),
+  act: (run: number, task: number, act: Act) => call<RecordDetail>("POST", `/api/approvals/${run}/tasks/${task}`, act),
+  tasks: () => call<MyTask[]>("GET", "/api/tasks"),
+  approvals: () => call<RunSummary[]>("GET", "/api/approvals"),
+  inbox: () => call<Notice[]>("GET", "/api/inbox"),
+  process: () => call<ProcessDefinitions>("GET", "/api/process"),
 };

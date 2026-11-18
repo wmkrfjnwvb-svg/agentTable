@@ -9,10 +9,15 @@
 //! * **Request lines** — quantity × unit price.
 //!
 //! The people are Alice (administrator), Bob (buyer), Carol (controller, approves up to
-//! 10 000), Dave (finance), Gina (a guest at a supplier) and an AI purchasing assistant.
+//! 10 000), Dave (finance, approves up to 100 000 and places orders), Erin (CFO), Gina (a
+//! guest at a supplier) and an AI purchasing assistant.
 //!
-//! Records are created through the real operations, as the people who own them, so the
-//! audit log tells the story from the first second.
+//! Requests follow a lifecycle (draft → submitted → approved → ordered, or rejected or
+//! cancelled). Submitting starts the purchase approval: whoever may approve the amount (by
+//! the access rules, never the requester), then the CFO above the CFO limit.
+//!
+//! Records are created, submitted and approved through the real operations, as the people
+//! who do it, so the audit log tells the story from the first second.
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{CellInput, Data, LinkPair, Person, Table, Workspace, BASE, WORKSPACE};
@@ -47,6 +52,8 @@ pub const DAVE: PrincipalId = PrincipalId::from_u128(4);
 pub const GINA: PrincipalId = PrincipalId::from_u128(5);
 /// The AI purchasing assistant.
 pub const ASSISTANT: PrincipalId = PrincipalId::from_u128(6);
+/// Erin: chief financial officer; approves requests above the CFO limit.
+pub const ERIN: PrincipalId = PrincipalId::from_u128(7);
 /// The purchasing team (Bob, Carol).
 pub const TEAM: PrincipalId = PrincipalId::from_u128(20);
 /// Finance (Dave).
@@ -153,6 +160,8 @@ pub mod status {
     pub const REJECTED: RefItemId = RefItemId::from_u128(9004);
     /// Ordered.
     pub const ORDERED: RefItemId = RefItemId::from_u128(9005);
+    /// Cancelled.
+    pub const CANCELLED: RefItemId = RefItemId::from_u128(9006);
 }
 
 fn cc(n: u128) -> RefItemId {
@@ -213,7 +222,13 @@ fn people() -> Vec<Person> {
             DAVE,
             "Dave Finance",
             PrincipalKind::Member,
-            "Finance — bank details, audit",
+            "Finance — approves up to 100,000, places orders",
+        ),
+        person(
+            ERIN,
+            "Erin CFO",
+            PrincipalKind::Member,
+            "Chief financial officer — approves above 25,000",
         ),
         person(
             GINA,
@@ -339,6 +354,7 @@ fn requests_table() -> ApiResult<Table> {
             option(9003, "Approved", "green"),
             option(9004, "Rejected", "red"),
             option(9005, "Ordered", "purple"),
+            option(9006, "Cancelled", "grey"),
         ],
     };
     let mut needed_by = field(request::NEEDED_BY, "Needed by", DataType::Date);
@@ -479,6 +495,7 @@ fn policy(ws: &mut Workspace, now: Timestamp) -> ApiResult<()> {
                 "record.delete",
                 "supplier.bank.view",
                 "supplier.bank.edit",
+                "order.place",
             ])?,
         ))
         .map_err(perm)?;
@@ -669,6 +686,22 @@ fn policy(ws: &mut Workspace, now: Timestamp) -> ApiResult<()> {
             "Contacts suppliers",
             now,
         ),
+        grant(
+            19,
+            ERIN,
+            cap(Action::RecordRead),
+            base,
+            "The CFO sees all purchasing",
+            now,
+        ),
+        grant(
+            20,
+            FINANCE,
+            custom("order.place")?,
+            table(REQUESTS),
+            "Places approved orders",
+            now,
+        ),
     ];
     for grant in grants {
         ws.data
@@ -855,6 +888,177 @@ fn formulas(ws: &mut Workspace) -> ApiResult<()> {
     ws.rebuild_graph()
 }
 
+/// The request lifecycle and the purchase approval.
+fn process(ws: &mut Workspace) -> ApiResult<()> {
+    use mt_core::state::StateCategory;
+    use mt_lifecycle::approval::{ApprovalDef, Approver, Case, Mode, Node};
+    use mt_lifecycle::lifecycle::{Lifecycle, StateDef, Transition};
+    let state = |key: &str, name: &str, category: StateCategory| StateDef {
+        key: key.to_owned(),
+        name: name.to_owned(),
+        category,
+        required: Vec::new(),
+        editable: None,
+    };
+    let go =
+        |key: &str, name: &str, from: &[&str], to: &str, capability: Option<&str>| Transition {
+            key: key.to_owned(),
+            name: name.to_owned(),
+            from: from.iter().map(|s| (*s).to_owned()).collect(),
+            to: to.to_owned(),
+            capability: capability.map(str::to_owned),
+            guard: None,
+            approval: None,
+        };
+    let system = Some(crate::process::SYSTEM);
+    let mut submitted = state("submitted", "Submitted", StateCategory::PendingApproval);
+    submitted.required = vec![request::TITLE, request::SUPPLIER, request::LINES];
+    submitted.editable = Some(Vec::new());
+    let mut approved = state("approved", "Approved", StateCategory::InProgress);
+    approved.editable = Some(vec![request::NEEDED_BY]);
+    let mut submit = go(
+        "submit",
+        "Submit for approval",
+        &["draft"],
+        "submitted",
+        None,
+    );
+    submit.guard = Some(Condition::compare(request::TOTAL, Operator::Gt, money(0)?));
+    submit.approval = Some("purchase_approval".to_owned());
+    let lifecycle = Lifecycle {
+        id: mt_core::id::LifecycleId::from_u128(1),
+        table: REQUESTS,
+        name: "Purchase request".to_owned(),
+        states: vec![
+            state("draft", "Draft", StateCategory::New),
+            submitted,
+            approved,
+            state("ordered", "Ordered", StateCategory::DoneSuccess),
+            state("rejected", "Rejected", StateCategory::DoneFailure),
+            state("cancelled", "Cancelled", StateCategory::Cancelled),
+        ],
+        initial: "draft".to_owned(),
+        transitions: vec![
+            submit,
+            go("withdraw", "Withdraw", &["submitted"], "draft", None),
+            go("approve", "Approve", &["submitted"], "approved", system),
+            go("reject", "Reject", &["submitted"], "rejected", system),
+            go("send_back", "Send back", &["submitted"], "draft", system),
+            go(
+                "order",
+                "Place the order",
+                &["approved"],
+                "ordered",
+                Some("order.place"),
+            ),
+            go("revise", "Revise", &["rejected"], "draft", None),
+            go("cancel", "Cancel", &[], "cancelled", None),
+        ],
+    };
+    let approval = ApprovalDef {
+        key: "purchase_approval".to_owned(),
+        name: "Purchase approval".to_owned(),
+        version: 1,
+        steps: vec![
+            Node::Approval {
+                key: "within_limits".to_owned(),
+                name: "Approver within limits".to_owned(),
+                approvers: vec![Approver::Capability {
+                    capability: "request.approve".to_owned(),
+                }],
+                mode: Mode::Any,
+                allow_return: true,
+                timeout: None,
+                escalate_to: None,
+            },
+            Node::Branch {
+                key: "cfo_limit".to_owned(),
+                name: "Above the CFO limit?".to_owned(),
+                cases: vec![Case {
+                    name: "Needs CFO".to_owned(),
+                    when: Condition::compare(request::NEEDS_CFO, Operator::Eq, Value::Bool(true)),
+                    then: vec![Node::Approval {
+                        key: "cfo".to_owned(),
+                        name: "CFO".to_owned(),
+                        approvers: vec![Approver::Person { id: ERIN }],
+                        mode: Mode::Any,
+                        allow_return: true,
+                        timeout: None,
+                        escalate_to: None,
+                    }],
+                }],
+                otherwise: Vec::new(),
+            },
+            Node::Notify {
+                key: "ready_to_order".to_owned(),
+                name: "Approved — ready to order".to_owned(),
+                to: vec![Approver::Capability {
+                    capability: "order.place".to_owned(),
+                }],
+            },
+        ],
+    };
+    let table = ws.table(REQUESTS)?;
+    let type_of = |field: FieldId| table.field(field).map(|f| f.data_type);
+    let bad = |e: mt_lifecycle::LifecycleError| ApiError::internal(e.to_string());
+    lifecycle.check().map_err(bad)?;
+    lifecycle.check_in_table(&type_of).map_err(bad)?;
+    approval.check().map_err(bad)?;
+    approval.check_in_table(&type_of).map_err(bad)?;
+    let option = |state: &str, option: RefItemId| crate::process::StateOption {
+        state: state.to_owned(),
+        option,
+    };
+    ws.data.process.bindings.push(crate::process::Binding {
+        lifecycle,
+        field: request::STATUS,
+        options: vec![
+            option("draft", status::DRAFT),
+            option("submitted", status::SUBMITTED),
+            option("approved", status::APPROVED),
+            option("ordered", status::ORDERED),
+            option("rejected", status::REJECTED),
+            option("cancelled", status::CANCELLED),
+        ],
+        children: vec![crate::process::Child {
+            table: LINES,
+            link: line::REQUEST,
+            parent_field: request::LINES,
+        }],
+        on_approved: "approve".to_owned(),
+        on_rejected: "reject".to_owned(),
+        on_returned: "send_back".to_owned(),
+    });
+    ws.data.process.definitions.push(approval);
+    Ok(())
+}
+
+/// The open task of a person on a record's approval, approved.
+fn approve_as(
+    ws: &mut Workspace,
+    who: PrincipalId,
+    record: RecordId,
+    now: Timestamp,
+) -> ApiResult<()> {
+    let (run, task) = ws
+        .data
+        .process
+        .runs
+        .iter()
+        .filter(|r| r.record == record)
+        .find_map(|r| r.approval.tasks_of(who).first().map(|t| (r.id, t.id)))
+        .ok_or_else(|| ApiError::internal(format!("{} has no task", ws.name_of(who))))?;
+    crate::process::act(
+        ws,
+        Actor::direct(who),
+        run,
+        task,
+        mt_lifecycle::approval::Act::Approve { comment: None },
+        now,
+    )
+    .map(|_| ())
+}
+
 /// Builds the demo workspace.
 ///
 /// # Errors
@@ -876,6 +1080,7 @@ pub fn demo(now: Timestamp) -> ApiResult<Workspace> {
         counters: BTreeMap::new(),
         next_id: 0,
         audit: Vec::new(),
+        process: crate::process::Process::default(),
         links: vec![
             LinkPair {
                 table: REQUESTS,
@@ -894,6 +1099,7 @@ pub fn demo(now: Timestamp) -> ApiResult<Workspace> {
     let mut ws = Workspace::new(data)?;
     formulas(&mut ws)?;
     policy(&mut ws, now)?;
+    process(&mut ws)?;
     records(&mut ws, now)?;
     Ok(ws)
 }
@@ -1037,16 +1243,17 @@ fn records(ws: &mut Workspace, now: Timestamp) -> ApiResult<()> {
             vec![("Toner cartridge", 9104, "10", "89.90")],
         ),
     ];
+    let mut created: Vec<(PrincipalId, RecordId, RefItemId)> = Vec::new();
     for (who, title, supplier_name, centre, state, due, lines) in requests {
         let actor = Actor::direct(who);
         let cells = BTreeMap::from([
             (request::TITLE, text(title)),
             (request::SUPPLIER, value(supplier_of(supplier_name))),
             (request::COST_CENTRE, value(Value::Reference(cc(centre)))),
-            (request::STATUS, value(Value::Reference(state))),
             (request::NEEDED_BY, text(&day(due))),
         ]);
         let request_id = ws.create_record(actor, REQUESTS, &cells, now)?;
+        created.push((who, request_id, state));
         for (item, category, quantity, price) in lines {
             let cells = BTreeMap::from([
                 (line::ITEM, text(item)),
@@ -1059,6 +1266,26 @@ fn records(ws: &mut Workspace, now: Timestamp) -> ApiResult<()> {
                 (line::PRICE, text(&format!("{price} USD"))),
             ]);
             ws.create_record(actor, LINES, &cells, now)?;
+        }
+    }
+    // Take each request to its state the way people would.
+    for (who, id, state) in created {
+        let submit = |ws: &mut Workspace| {
+            crate::process::transition(ws, Actor::direct(who), REQUESTS, id, "submit", now)
+        };
+        if state == status::SUBMITTED {
+            submit(ws)?;
+            // Above the controller's limit, finance approves first; the CFO is next.
+            if who == CAROL {
+                approve_as(ws, DAVE, id, now)?;
+            }
+        } else if state == status::APPROVED {
+            submit(ws)?;
+            approve_as(ws, DAVE, id, now)?;
+        } else if state == status::ORDERED {
+            submit(ws)?;
+            approve_as(ws, CAROL, id, now)?;
+            crate::process::transition(ws, Actor::direct(DAVE), REQUESTS, id, "order", now)?;
         }
     }
     Ok(())

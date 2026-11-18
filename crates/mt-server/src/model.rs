@@ -168,6 +168,9 @@ pub struct Data {
     pub audit: Vec<AuditEntry>,
     /// Mirrored link fields.
     pub links: Vec<LinkPair>,
+    /// Lifecycles, approvals and the inbox.
+    #[serde(default)]
+    pub process: crate::process::Process,
 }
 
 /// A cell as a client sends it: text to read as the field's type, or a structured value
@@ -288,7 +291,7 @@ impl Workspace {
             .ok_or_else(|| ApiError::not_found(format!("table {id}")))
     }
 
-    fn table_mut(&mut self, id: TableId) -> ApiResult<&mut Table> {
+    pub(crate) fn table_mut(&mut self, id: TableId) -> ApiResult<&mut Table> {
         self.data
             .tables
             .iter_mut()
@@ -688,6 +691,7 @@ impl Workspace {
             now,
         )?;
         let values = self.read_inputs(actor, table, None, inputs, now)?;
+        crate::process::guard_create(self, table, &values)?;
         // Required fields that were not given.
         let mut issues = Vec::new();
         for field in &table.fields {
@@ -747,6 +751,7 @@ impl Workspace {
             }
             set_cell(&mut record, field, value);
         }
+        crate::process::initialise(self, table_id, &mut record);
         self.table_mut(table_id)?.records.push(record);
         for (field, ids) in links {
             self.sync_inverse(table_id, field, id, &ids)?;
@@ -805,6 +810,12 @@ impl Workspace {
         if before.is_empty() {
             return Ok(());
         }
+        let changed: Vec<(FieldId, Value)> = values
+            .iter()
+            .filter(|(field, _)| before.iter().any(|(changed, _, _)| changed == field))
+            .cloned()
+            .collect();
+        crate::process::guard_update(self, table, record, &changed)?;
         let mut links = Vec::new();
         {
             let table = self.table_mut(table_id)?;
@@ -876,6 +887,7 @@ impl Workspace {
             Some(record),
             now,
         )?;
+        crate::process::guard_delete(self, table, record)?;
         let title = self.title(table_id, record_id);
         self.table_mut(table_id)?
             .records

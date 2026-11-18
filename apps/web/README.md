@@ -12,7 +12,8 @@ ships as one executable.
 | `src/RecordPanel.tsx` | Record editor with per-field permissions, validation messages and access decisions (change, delete, approve) |
 | `src/FieldPicker.tsx` | The field picker (8 groups, synonym search) and the live formula editor |
 | `src/pages.tsx` | Product status, reference data, access explain, audit log, placeholders |
-| `e2e/product.spec.ts` | The browser walk-through (Playwright), one screenshot per step |
+| `src/Process.tsx` | Lifecycle state and buttons in the record panel, the approval timeline and decision box, Approvals (my tasks, all approvals, process design), Inbox |
+| `e2e/product.spec.ts` | The browser walk-through (Playwright), one screenshot per step: tables, formulas, access, approvals (submit, my tasks, reject, CFO, order, inbox, process design), audit |
 
 ## Develop
 

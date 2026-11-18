@@ -8,130 +8,12 @@
     clippy::arithmetic_side_effects
 )]
 
-use axum::body::Body;
-use axum::http::{Method, Request, StatusCode};
-use http_body_util::BodyExt;
-use mt_core::time::Timestamp;
-use mt_server::api::{App, Clock};
+mod common;
+
+use common::*;
+use http_body_util as _;
 use mt_server::seed::{self, line, request, supplier, LINES, REQUESTS, SUPPLIERS};
-use serde_json::{json, Value};
-use std::sync::Arc;
-use tower::ServiceExt;
-
-const ALICE: &str = "prn_00000000000000000000000001";
-const BOB: &str = "prn_00000000000000000000000002";
-const CAROL: &str = "prn_00000000000000000000000003";
-const DAVE: &str = "prn_00000000000000000000000004";
-const GINA: &str = "prn_00000000000000000000000005";
-const ASSISTANT: &str = "prn_00000000000000000000000006";
-const TEAM: &str = "prn_0000000000000000000000000m";
-
-fn now() -> Timestamp {
-    // 2026-11-18T10:00:00Z, a Wednesday (searching "laptop" alone also finds the lines of
-    // "Laptops for new hires": links are searched by their titles).
-    Timestamp::from_millis(1_794_996_000_000).unwrap()
-}
-
-fn app() -> Arc<App> {
-    mt_server::open(None, Clock::Fixed(now())).unwrap()
-}
-
-async fn call(
-    app: &Arc<App>,
-    method: Method,
-    path: &str,
-    user: Option<&str>,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
-    call_as(app, method, path, user, None, body).await
-}
-
-async fn call_as(
-    app: &Arc<App>,
-    method: Method,
-    path: &str,
-    user: Option<&str>,
-    for_whom: Option<&str>,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
-    let mut builder = Request::builder().method(method).uri(path);
-    if let Some(user) = user {
-        builder = builder.header("x-user", user);
-    }
-    if let Some(for_whom) = for_whom {
-        builder = builder.header("x-on-behalf-of", for_whom);
-    }
-    let request = match body {
-        Some(body) => builder
-            .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap(),
-        None => builder.body(Body::empty()).unwrap(),
-    };
-    let response = mt_server::router(app.clone())
-        .oneshot(request)
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let value = serde_json::from_slice(&bytes)
-        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
-    (status, value)
-}
-
-fn table_path(id: mt_core::id::TableId) -> String {
-    format!("/api/tables/{id}")
-}
-
-async fn query(
-    app: &Arc<App>,
-    user: &str,
-    table: mt_core::id::TableId,
-    spec: Value,
-) -> (StatusCode, Value) {
-    call(
-        app,
-        Method::POST,
-        &format!("{}/query", table_path(table)),
-        Some(user),
-        Some(spec),
-    )
-    .await
-}
-
-fn titles(result: &Value) -> Vec<String> {
-    result["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["title"].as_str().unwrap().to_owned())
-        .collect()
-}
-
-fn cell(result: &Value, title: &str, field: mt_core::id::FieldId) -> String {
-    let row = result["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["title"] == title)
-        .unwrap();
-    row["cells"][field.to_string()]["d"]
-        .as_str()
-        .unwrap_or_default()
-        .to_owned()
-}
-
-fn record_id(result: &Value, title: &str) -> String {
-    result["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["title"] == title)
-        .unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_owned()
-}
+use tower as _;
 
 #[tokio::test]
 async fn std_status_people_and_tables() {
@@ -149,7 +31,7 @@ async fn std_status_people_and_tables() {
         states.contains(&"live") && states.contains(&"placeholder") && states.contains(&"engine")
     );
     let (_, people) = call(&app, Method::GET, "/api/people", None, None).await;
-    assert_eq!(people.as_array().unwrap().len(), 8);
+    assert_eq!(people.as_array().unwrap().len(), 9);
     let team = people
         .as_array()
         .unwrap()
@@ -298,30 +180,46 @@ async fn std_formulas_compute_across_tables() {
         cell(&suppliers, "Northwind Traders", supplier::REQUESTS),
         "Laptops for new hires, Printer toner"
     );
-    // Change a line: the request, and the supplier's spend, follow.
-    let (_, lines) = query(&app, ALICE, LINES, json!({"search": "laptop 14"})).await;
-    assert_eq!(titles(&lines), ["Laptop 14\""]);
-    let laptop = record_id(&lines, "Laptop 14\"");
-    let path = format!("{}/records/{laptop}", table_path(LINES));
+    // Change a line of the draft: the request, and the supplier's spend, follow.
+    let (_, lines) = query(&app, ALICE, LINES, json!({"search": "chair"})).await;
+    assert_eq!(titles(&lines), ["Ergonomic chair"]);
+    let chair = record_id(&lines, "Ergonomic chair");
+    let path = format!("{}/records/{chair}", table_path(LINES));
     let (status, record) = call(
         &app,
         Method::PATCH,
         &path,
         None,
-        Some(json!({"cells": {line::QUANTITY.to_string(): {"text": "4"}}})),
+        Some(json!({"cells": {line::QUANTITY.to_string(): {"text": "8"}}})),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{record}");
     assert_eq!(record["version"], 2);
     let (_, requests) = query(&app, ALICE, REQUESTS, json!({})).await;
     assert_eq!(
-        cell(&requests, "Laptops for new hires", request::TOTAL),
-        "6,928.20 USD"
+        cell(&requests, "Office chairs", request::TOTAL),
+        "2,764.80 USD"
     );
     let (_, suppliers) = query(&app, ALICE, SUPPLIERS, json!({})).await;
     assert_eq!(
-        cell(&suppliers, "Northwind Traders", supplier::SPEND),
-        "7,899.12 USD"
+        cell(&suppliers, "Contoso Supplies", supplier::SPEND),
+        "2,764.80 USD"
+    );
+    // A line of a request under approval cannot change: its total is being approved.
+    let (_, lines) = query(&app, ALICE, LINES, json!({"search": "laptop 14"})).await;
+    let laptop = record_id(&lines, "Laptop 14\"");
+    let (status, body) = call(
+        &app,
+        Method::PATCH,
+        &format!("{}/records/{laptop}", table_path(LINES)),
+        None,
+        Some(json!({"cells": {line::QUANTITY.to_string(): {"text": "4"}}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        body["message"],
+        "“Laptops for new hires” is Submitted: its lines cannot change"
     );
     // An unchanged value is not a change.
     let (status, record) = call(
@@ -329,7 +227,7 @@ async fn std_formulas_compute_across_tables() {
         Method::PATCH,
         &path,
         None,
-        Some(json!({"cells": {line::QUANTITY.to_string(): {"text": "4"}}})),
+        Some(json!({"cells": {line::QUANTITY.to_string(): {"text": "8"}}})),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -774,7 +672,7 @@ async fn invalid_changes_are_refused_with_reasons() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     // Nothing of this reached the audit log.
     let (_, entries) = call(&app, Method::GET, "/api/audit", None, None).await;
-    assert_eq!(entries.as_array().unwrap().len(), 18);
+    assert_eq!(entries.as_array().unwrap().len(), 32);
 }
 
 #[tokio::test]
@@ -785,6 +683,23 @@ async fn std_links_stay_mirrored() {
     let laptops = record_id(&requests, "Laptops for new hires");
     let (_, lines) = query(&app, ALICE, LINES, json!({})).await;
     let mouse = record_id(&lines, "Wireless mouse");
+    // Lines of a request under approval stay where they are.
+    let (status, _) = call(&app, Method::PATCH, &format!("{}/records/{mouse}", table_path(LINES)), None, Some(json!({"cells": {line::REQUEST.to_string(): {"value": {"type": "link", "value": [chairs]}}}}))).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    // Once withdrawn, the laptops request is a draft again.
+    let (status, body) = call(
+        &app,
+        Method::POST,
+        &format!(
+            "{}/records/{laptops}/transitions/withdraw",
+            table_path(REQUESTS)
+        ),
+        Some(BOB),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["process"]["state"]["name"], "Draft");
     // Move the mouse to the chairs request: it leaves the laptops request.
     let (status, _) = call(&app, Method::PATCH, &format!("{}/records/{mouse}", table_path(LINES)), None, Some(json!({"cells": {line::REQUEST.to_string(): {"value": {"type": "link", "value": [chairs]}}}}))).await;
     assert_eq!(status, StatusCode::OK);
@@ -864,7 +779,14 @@ async fn std_options_for_every_kind_of_field() {
         .collect();
     assert_eq!(
         labels,
-        ["Draft", "Submitted", "Approved", "Rejected", "Ordered"]
+        [
+            "Draft",
+            "Submitted",
+            "Approved",
+            "Rejected",
+            "Ordered",
+            "Cancelled"
+        ]
     );
     let (_, centres) = call(
         &app,
@@ -893,7 +815,7 @@ async fn std_options_for_every_kind_of_field() {
         None,
     )
     .await;
-    assert_eq!(people.as_array().unwrap().len(), 6, "people, not groups");
+    assert_eq!(people.as_array().unwrap().len(), 7, "people, not groups");
     let (_, none) = call(
         &app,
         Method::GET,
@@ -1316,14 +1238,17 @@ async fn std_the_audit_chain() {
     }
     let (_, entries) = call(&app, Method::GET, "/api/audit", Some(DAVE), None).await;
     let entries = entries.as_array().unwrap();
-    assert_eq!(entries.len(), 18);
-    assert_eq!(entries[0]["seq"], 18, "newest first");
-    assert_eq!(entries[17]["actor"], "Alice Admin");
-    assert_eq!(entries[17]["details"]["title"], "Northwind Traders");
-    assert_eq!(entries[17]["prev"].as_str().unwrap().len(), 64);
+    assert_eq!(entries.len(), 32);
+    assert_eq!(entries[0]["seq"], 32, "newest first");
+    assert_eq!(entries[0]["action"], "record.transition");
+    assert_eq!(entries[0]["actor"], "Dave Finance");
+    assert_eq!(entries[0]["details"]["to"], "Ordered");
+    assert_eq!(entries[31]["actor"], "Alice Admin");
+    assert_eq!(entries[31]["details"]["title"], "Northwind Traders");
+    assert_eq!(entries[31]["prev"].as_str().unwrap().len(), 64);
     let (_, verdict) = call(&app, Method::GET, "/api/audit/verify", Some(DAVE), None).await;
     assert_eq!(verdict["intact"], true);
-    assert_eq!(verdict["entries"], 18);
+    assert_eq!(verdict["entries"], 32);
     let (_, tampered) = call(
         &app,
         Method::POST,
@@ -1346,11 +1271,11 @@ async fn std_the_audit_chain() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     // The real chain is untouched; an agent's change records both identities.
     let (_, lines) = query(&app, ALICE, LINES, json!({})).await;
-    let toner = record_id(&lines, "Toner cartridge");
+    let chair = record_id(&lines, "Ergonomic chair");
     let (status, body) = call_as(
         &app,
         Method::PATCH,
-        &format!("{}/records/{toner}", table_path(LINES)),
+        &format!("{}/records/{chair}", table_path(LINES)),
         Some(ASSISTANT),
         Some(BOB),
         Some(json!({"cells": {line::QUANTITY.to_string(): {"text": "12"}}})),
@@ -1360,9 +1285,9 @@ async fn std_the_audit_chain() {
     let (_, entries) = call(&app, Method::GET, "/api/audit", None, None).await;
     assert_eq!(entries[0]["actor"], "Purchasing assistant");
     assert_eq!(entries[0]["initiator"], "Bob Buyer");
-    assert_eq!(entries[0]["details"]["changes"][0]["from"], "10");
+    assert_eq!(entries[0]["details"]["changes"][0]["from"], "6");
     let (_, verdict) = call(&app, Method::GET, "/api/audit/verify", None, None).await;
-    assert_eq!(verdict["entries"], 19);
+    assert_eq!(verdict["entries"], 33);
 }
 
 #[tokio::test]
@@ -1392,7 +1317,7 @@ async fn std_the_workspace_is_saved_and_reopened() {
         "2,764.80 USD"
     );
     let (_, verdict) = call(&reopened, Method::GET, "/api/audit/verify", None, None).await;
-    assert_eq!(verdict["entries"], 19);
+    assert_eq!(verdict["entries"], 33);
     // A damaged file is reported, not ignored.
     std::fs::write(&file, b"{ not json").unwrap();
     assert!(mt_server::open(Some(file.clone()), Clock::Fixed(now())).is_err());

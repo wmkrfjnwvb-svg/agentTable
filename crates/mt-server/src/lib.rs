@@ -12,6 +12,7 @@ pub mod api;
 pub mod error;
 pub mod formula;
 pub mod model;
+pub mod process;
 pub mod seed;
 pub mod view;
 pub mod web;

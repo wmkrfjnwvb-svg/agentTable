@@ -649,6 +649,7 @@ dependencies = [
  "mt-audit",
  "mt-core",
  "mt-formula",
+ "mt-lifecycle",
  "mt-perm",
  "mt-query",
  "mt-refdata",

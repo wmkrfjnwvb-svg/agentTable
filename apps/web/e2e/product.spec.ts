@@ -11,6 +11,7 @@ const people = {
   dave: "prn_00000000000000000000000004",
   gina: "prn_00000000000000000000000005",
   assistant: "prn_00000000000000000000000006",
+  erin: "prn_00000000000000000000000007",
 };
 
 mkdirSync("e2e/screenshots", { recursive: true });
@@ -64,21 +65,31 @@ test.describe.serial("agenttable end to end", () => {
 
   test("changing a line recomputes the request and the supplier", async () => {
     await openTable(page, "Request lines");
-    await row(page, "Laptop 14").click();
-    await expect(page.getByTestId("panel-title")).toHaveText('Laptop 14"');
-    await page.getByTestId("edit-Quantity").fill("4");
+    await row(page, "Ergonomic chair").click();
+    await expect(page.getByTestId("panel-title")).toHaveText("Ergonomic chair");
+    await page.getByTestId("edit-Quantity").fill("8");
     await page.getByTestId("save").click();
     await expect(page.getByTestId("panel-message")).toHaveText("Saved.");
-    await expect(page.getByTestId("value-Amount")).toContainText("5,800.00 USD");
+    await expect(page.getByTestId("value-Amount")).toContainText("2,560.00 USD");
     await shot(page, "03-line-changed");
     await page.getByTestId("close-panel").click();
     await openTable(page, "Purchase requests");
-    // 6,415.00 + 8 % tax = 6,928.20
-    await expect(row(page, "Laptops for new hires")).toContainText("6,928.20 USD");
+    // 2,560.00 + 8 % tax = 2,764.80
+    await expect(row(page, "Office chairs")).toContainText("2,764.80 USD");
     await openTable(page, "Suppliers");
-    // Laptops 6,928.20 + toner 970.92
-    await expect(row(page, "Northwind Traders")).toContainText("7,899.12 USD");
+    await expect(row(page, "Contoso Supplies")).toContainText("2,764.80 USD");
     await shot(page, "04-recomputed-across-tables");
+  });
+
+  test("lines of a request under approval are locked", async () => {
+    await openTable(page, "Request lines");
+    await row(page, "Laptop 14").click();
+    await page.getByTestId("edit-Quantity").fill("4");
+    await page.getByTestId("save").click();
+    await expect(page.getByTestId("panel-message")).toContainText("is Submitted: its lines cannot change");
+    await shot(page, "05a-line-locked");
+    await page.getByTestId("close-panel").click();
+    await openTable(page, "Suppliers");
   });
 
   test("invalid values are refused with a reason", async () => {
@@ -184,6 +195,85 @@ test.describe.serial("agenttable end to end", () => {
     await shot(page, "17-explain");
   });
 
+  test("a draft is submitted and routed by the access rules", async () => {
+    await signIn(page, "bob");
+    await openTable(page, "Purchase requests");
+    await row(page, "Office chairs").click();
+    await expect(page.getByTestId("state")).toHaveText("Draft");
+    await expect(page.getByTestId("would-ask")).toContainText("Carol Controller or Dave Finance");
+    await shot(page, "21-draft-would-ask");
+    await page.getByTestId("transition-submit").click();
+    await expect(page.getByTestId("state")).toHaveText("Submitted");
+    await expect(page.getByTestId("timeline")).toContainText("Carol Controller");
+    await expect(page.getByTestId("timeline")).toContainText("Dave Finance");
+    await expect(page.getByTestId("edit-Title")).toHaveCount(0);
+    await shot(page, "22-submitted");
+    await page.getByTestId("close-panel").click();
+  });
+
+  test("the approver decides from My approvals", async () => {
+    await signIn(page, "carol");
+    await page.getByTestId("nav-approvals").click();
+    await expect(page.getByTestId("task-card")).toHaveCount(2);
+    await page.getByTestId("task-card").filter({ hasText: "Office chairs" }).click();
+    await expect(page.getByTestId("task-record")).toHaveText("Office chairs");
+    await page.getByTestId("task-comment").fill("Fine, standard model");
+    await shot(page, "23-my-tasks");
+    await page.getByTestId("task-approve").click();
+    await expect(page.getByTestId("task-done")).toContainText("Approved");
+    await expect(page.getByTestId("task-card")).toHaveCount(1);
+    await shot(page, "24-approved");
+  });
+
+  test("the requester is told in the inbox", async () => {
+    await signIn(page, "bob");
+    await page.getByTestId("nav-inbox").click();
+    await expect(page.getByTestId("inbox")).toContainText("“Office chairs” was approved");
+    await shot(page, "25-inbox");
+  });
+
+  test("a rejection needs a reason; above the limit the CFO decides", async () => {
+    await signIn(page, "dave");
+    await page.getByTestId("nav-approvals").click();
+    await page.getByTestId("task-card").filter({ hasText: "Laptops for new hires" }).click();
+    await page.getByTestId("task-reject").click();
+    await expect(page.getByTestId("task-message")).toContainText("give a reason");
+    await page.getByTestId("task-comment").fill("Buy refurbished");
+    await page.getByTestId("task-reject").click();
+    await expect(page.getByTestId("task-done")).toContainText("Rejected");
+    await signIn(page, "erin");
+    await page.getByTestId("nav-approvals").click();
+    await page.getByTestId("task-card").filter({ hasText: "Trade fair booth" }).click();
+    await expect(page.getByTestId("timeline")).toContainText("Dave Finance");
+    await shot(page, "26-cfo-task");
+    await page.getByTestId("task-approve").click();
+    await expect(page.getByTestId("task-done")).toContainText("Approved");
+    await expect(page.getByTestId("no-tasks")).toBeVisible();
+  });
+
+  test("finance places the order", async () => {
+    await signIn(page, "dave");
+    await openTable(page, "Purchase requests");
+    await row(page, "Office chairs").click();
+    await expect(page.getByTestId("state")).toHaveText("Approved");
+    await page.getByTestId("transition-order").click();
+    await expect(page.getByTestId("state")).toHaveText("Ordered");
+    await expect(page.getByTestId("approval-status")).toHaveText("approved");
+    await shot(page, "27-ordered");
+    await page.getByTestId("close-panel").click();
+  });
+
+  test("the process design is shown", async () => {
+    await page.getByTestId("nav-approvals").click();
+    await page.getByTestId("tab-design").click();
+    await expect(page.getByTestId("process-design")).toContainText("Erin CFO");
+    await expect(page.getByTestId("process-design")).toContainText("whoever may “request.approve” it");
+    await shot(page, "28-process-design");
+    await page.getByTestId("tab-all").click();
+    await expect(page.getByTestId("all-approvals")).toContainText("Trade fair booth");
+    await shot(page, "29-all-approvals");
+  });
+
   test("reference data shows the cost-centre tree", async () => {
     await page.getByTestId("nav-refdata").click();
     await page.getByTestId("set-cost_centre").click();
@@ -192,10 +282,12 @@ test.describe.serial("agenttable end to end", () => {
   });
 
   test("the audit chain verifies and detects tampering", async () => {
+    await signIn(page, "carol");
     await page.getByTestId("nav-audit").click();
     await expect(page.getByTestId("no-access")).toBeVisible();
     await signIn(page, "dave");
     await expect(page.getByTestId("audit-entries")).toContainText("record.update");
+    await expect(page.getByTestId("audit-entries")).toContainText("approval.approve");
     await page.getByTestId("verify").click();
     await expect(page.getByTestId("verdict")).toContainText("Chain intact");
     await page.getByTestId("tamper").click();
@@ -204,8 +296,8 @@ test.describe.serial("agenttable end to end", () => {
   });
 
   test("planned modules are shown as placeholders", async () => {
-    await page.getByTestId("nav-soon-approvals").click();
-    await expect(page.getByTestId("placeholder")).toContainText("Planned for wave 2");
+    await page.getByTestId("nav-soon-automations").click();
+    await expect(page.getByTestId("placeholder")).toContainText("Planned for wave 5");
     await shot(page, "20-placeholder");
   });
 });

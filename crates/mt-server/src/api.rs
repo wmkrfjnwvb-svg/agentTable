@@ -144,6 +144,15 @@ pub fn routes() -> Router<Shared> {
         .route("/api/audit", get(audit))
         .route("/api/audit/verify", get(verify))
         .route("/api/audit/tamper-check", post(tamper_check))
+        .route(
+            "/api/tables/{table}/records/{record}/transitions/{key}",
+            post(transition),
+        )
+        .route("/api/approvals", get(approvals))
+        .route("/api/approvals/{run}/tasks/{task}", post(act))
+        .route("/api/tasks", get(tasks))
+        .route("/api/inbox", get(inbox))
+        .route("/api/process", get(process_definitions))
 }
 
 // ------------------------------------------------------------------- status
@@ -161,13 +170,13 @@ async fn status() -> Json<JsonValue> {
             component("mt-query", 2, "live", "Search, filter, sort, group and totals of the grid"),
             component("mt-formula", 2, "live", "Formula, lookup and roll-up fields; recompute across tables; the formula editor"),
             component("mt-perm", 2, "live", "Who sees and changes what: scopes, limits, field protection, separation of duties, explain"),
-            component("mt-lifecycle", 2, "placeholder", "States, transitions, SLA clocks and approvals"),
+            component("mt-lifecycle", 2, "live", "Request lifecycle, approvals routed by the access rules (limits, CFO step), my tasks, inbox; SLA clocks and business calendars"),
             component("mt-store", 3, "placeholder", "SQLite, MySQL and PostgreSQL storage (now: one JSON file)"),
             component("mt-ops", 3, "placeholder", "Operation pipeline, real-time collaboration, undo"),
             component("mt-identity", 4, "placeholder", "Sign-in, SSO, sessions (now: a user switcher)"),
             component("mt-api", 4, "placeholder", "Versioned Public and Admin APIs with OpenAPI"),
             component("mt-rules", 5, "placeholder", "Automations and workflows"),
-            component("mt-notify", 5, "placeholder", "Notifications"),
+            component("mt-notify", 5, "placeholder", "Notifications by email and chat (now: the in-app inbox)"),
             component("mt-metrics", 6, "placeholder", "Dashboards and metrics"),
             component("mt-ai", 6, "placeholder", "AI skills, agents and the assistant"),
         ]
@@ -626,6 +635,7 @@ fn record_json(
         now,
     )?;
     let permissions = ws.field_permissions(actor, table, Some(record), now);
+    let frozen = crate::process::frozen(ws, table, record);
     let mut fields = Vec::new();
     for field in &table.fields {
         let permission = permissions.get(&field.id).copied();
@@ -633,6 +643,21 @@ fn record_json(
             let mut described = view::field(ws, table, field, Some(p));
             if let JsonValue::Object(map) = &mut described {
                 map.insert("cell".to_owned(), view::cell(ws, field, record, p));
+                if let Some((state_field, list, state)) = &frozen {
+                    if *state_field == field.id {
+                        map.insert("editable".to_owned(), json!(false));
+                        map.insert(
+                            "lockedReason".to_owned(),
+                            json!("changes through the buttons above"),
+                        );
+                    } else if list.contains(&field.id) {
+                        map.insert("editable".to_owned(), json!(false));
+                        map.insert(
+                            "lockedReason".to_owned(),
+                            json!(format!("locked while {state}")),
+                        );
+                    }
+                }
             }
             fields.push(described);
         }
@@ -668,7 +693,64 @@ fn record_json(
         "modifiedBy": ws.name_of(record.modified_by),
         "modifiedAt": record.modified_at,
         "version": record.version,
+        "process": crate::process::record_json(ws, actor, table, record, now),
     }))
+}
+
+// ------------------------------------------------------------------- process
+
+async fn transition(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path((table, record, key)): Path<(String, String, String)>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let now = app.clock.now();
+    let table_id: TableId = parse(&table, "table")?;
+    let record_id: RecordId = parse(&record, "record")?;
+    crate::process::transition(&mut ws, actor, table_id, record_id, &key, now)?;
+    app.save(&ws)?;
+    let table = ws.table(table_id)?;
+    Ok(Json(record_json(&ws, actor, table, record_id, now)?))
+}
+
+async fn act(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path((run, task)): Path<(u64, u32)>,
+    Json(body): Json<mt_lifecycle::approval::Act>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let now = app.clock.now();
+    let (table_id, record_id) = crate::process::act(&mut ws, actor, run, task, body, now)?;
+    app.save(&ws)?;
+    let table = ws.table(table_id)?;
+    Ok(Json(record_json(&ws, actor, table, record_id, now)?))
+}
+
+async fn tasks(State(app): State<Shared>, headers: HeaderMap) -> Reply {
+    let ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    Ok(Json(crate::process::tasks_json(&ws, actor)))
+}
+
+async fn approvals(State(app): State<Shared>, headers: HeaderMap) -> Reply {
+    let ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    Ok(Json(crate::process::runs_json(&ws, actor, app.clock.now())))
+}
+
+async fn inbox(State(app): State<Shared>, headers: HeaderMap) -> Reply {
+    let ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    Ok(Json(crate::process::inbox_json(&ws, actor)))
+}
+
+async fn process_definitions(State(app): State<Shared>) -> Json<JsonValue> {
+    let ws = app.ws.lock().await;
+    Json(crate::process::definitions_json(&ws))
 }
 
 async fn record(

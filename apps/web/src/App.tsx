@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, Person, setIdentity, TableSummary } from "./api";
 import TablePage from "./TablePage";
 import { AccessPage, AuditPage, OverviewPage, PlaceholderPage, PLACEHOLDERS, RefDataPage } from "./pages";
+import { ApprovalsPage, InboxPage } from "./Process";
 
 function useRoute(): string {
   const [route, setRoute] = useState(() => window.location.hash.slice(1) || "/");
@@ -30,6 +31,8 @@ export default function App() {
   const [onBehalfOf, setOnBehalfOf] = useState(() => initial("agenttable.for", ""));
   const [tables, setTables] = useState<TableSummary[]>([]);
   const [generation, setGeneration] = useState(0);
+  const [taskCount, setTaskCount] = useState(0);
+  const [noticeCount, setNoticeCount] = useState(0);
 
   setIdentity(user, onBehalfOf);
 
@@ -48,6 +51,12 @@ export default function App() {
     setGeneration((g) => g + 1);
   }, [user, onBehalfOf]);
 
+  // Counts in the sidebar, refreshed when the identity or the page changes.
+  useEffect(() => {
+    api.tasks().then((t) => setTaskCount(t.length)).catch(() => setTaskCount(0));
+    api.inbox().then((n) => setNoticeCount(n.length)).catch(() => setNoticeCount(0));
+  }, [user, onBehalfOf, route, generation]);
+
   const me = people.find((p) => p.id === user);
   const isAgent = me?.kind === "agent";
   const humans = people.filter((p) => p.kind === "member" || p.kind === "guest");
@@ -59,6 +68,8 @@ export default function App() {
   else if (section === "refdata") page = <RefDataPage key={generation} />;
   else if (section === "access") page = <AccessPage key={generation} people={people} tables={tables} />;
   else if (section === "audit") page = <AuditPage key={generation} />;
+  else if (section === "approvals") page = <ApprovalsPage key={generation} onCount={setTaskCount} />;
+  else if (section === "inbox") page = <InboxPage key={generation} />;
   else if (section === "soon" && id) page = <PlaceholderPage which={id} />;
   else page = <OverviewPage key={generation} tables={tables} />;
 
@@ -111,6 +122,9 @@ export default function App() {
             <span className="nav-extra">{t.canRead ? t.records : ""}</span>
           </a>
         ))}
+        <div className="nav-title">Work</div>
+        {link("/approvals", "Approvals", taskCount ? `${taskCount}` : undefined, "nav-approvals")}
+        {link("/inbox", "Inbox", noticeCount ? `${noticeCount}` : undefined, "nav-inbox")}
         <div className="nav-title">Platform</div>
         {link("/refdata", "Reference data", undefined, "nav-refdata")}
         {link("/access", "Access & explain", undefined, "nav-access")}

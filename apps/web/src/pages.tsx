@@ -4,18 +4,6 @@ import { ExplainList } from "./TablePage";
 
 export const PLACEHOLDERS = [
   {
-    key: "approvals",
-    title: "Approvals & lifecycles",
-    wave: 2,
-    crate: "mt-lifecycle",
-    what: [
-      "States with categories (open, in progress, done …), allowed transitions and required fields per state",
-      "Approval flows: sequential, all, any, quorum; delegate, return, add approvers",
-      "SLA clocks on business calendars, with pauses and escalation",
-    ],
-    today: "The “Approve…” button on a purchase request already runs the real access check (approval limits and “nobody approves their own request”).",
-  },
-  {
     key: "automations",
     title: "Automations",
     wave: 5,
@@ -28,8 +16,8 @@ export const PLACEHOLDERS = [
     title: "Notifications",
     wave: 5,
     crate: "mt-notify",
-    what: ["Email, chat and in-app messages from rules and workflows", "Per-person preferences and digests", "Delivery tracking"],
-    today: "—",
+    what: ["Email and chat delivery from rules, workflows and approvals", "Per-person preferences and digests", "Delivery tracking"],
+    today: "Approvals already write to each person's in-app Inbox.",
   },
   {
     key: "dashboards",

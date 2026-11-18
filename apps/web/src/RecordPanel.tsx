@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, CellInput, Column, Explanation, Option, RecordDetail, TableInfo, Value } from "./api";
 import { CellView, ExplainList } from "./TablePage";
+import { ProcessSection } from "./Process";
 
 type Draft = Record<string, CellInput>;
 
@@ -203,6 +204,18 @@ export default function RecordPanel({
         <button className="ghost" onClick={onClose} aria-label="Close" data-testid="close-panel">✕</button>
       </div>
       <div className="panel-body">
+        {!creating && record?.process && (
+          <ProcessSection
+            tableId={tableId}
+            record={record}
+            onChanged={(r) => {
+              setRecord(r);
+              setDraft({});
+              setMessage(null);
+              onSaved(r.id);
+            }}
+          />
+        )}
         {fields.map((column) => {
           const editable = canEdit && column.editable && !column.generated && column.visibility === "visible";
           return (
@@ -222,6 +235,7 @@ export default function RecordPanel({
                   </span>
                 )}
                 {column.formula && <div className="formula small">= {column.formula}</div>}
+                {!editable && column.lockedReason && canEdit && !column.generated && !column.computed && <div className="locked small">🔒 {column.lockedReason}</div>}
                 {errors[column.id] && <div className="field-error" data-testid="field-error">{errors[column.id]}</div>}
               </div>
             </div>
@@ -250,7 +264,7 @@ export default function RecordPanel({
                   <Decision
                     label="Approve"
                     explanation={record.actions.approve}
-                    note="The approval workflow itself arrives with mt-lifecycle; this check already uses the real access rules (limits, separation of duties)."
+                    note="Who may approve this request at all, by the access rules. The approval itself runs above: whoever may approve is asked."
                   />
                 )}
               </>
