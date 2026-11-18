@@ -19,7 +19,7 @@ anomalous, concurrency, cross-platform) plus property, model and simulation test
 | 2 | `mt-refdata` | Reference data, versioned changes with four-eyes approval, parameters | done |
 | 2 | `mt-query` | Filter, search, sort, group, totals, views | done |
 | 2 | `mt-formula` | Formula language, type checker, bounded evaluator, dependency graph | done |
-| 2 | `mt-perm` | Capabilities, grants, separation of duties, field permissions, explain | in the product; share-link and review tests pending |
+| 2 | `mt-perm` | Capabilities, grants, separation of duties, field permissions, share links, access reviews, explain | done |
 | 2 | `mt-lifecycle` | States, transitions, SLA clocks, approvals | next |
 | — | `mt-server` + `apps/web` | End-to-end build: one binary with the web app; placeholders for what is not built yet | live, grows every wave |
 | 3–8 | storage, API, identity, automation, AI, real-time grid | see doc 21 | planned |

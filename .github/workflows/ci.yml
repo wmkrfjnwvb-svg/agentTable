@@ -88,9 +88,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Engine crates reach 98 %
-        # mt-perm's share-link and review tests are still being written; that exception is
-        # removed in the commit that adds them.
-        run: cargo llvm-cov report --fail-under-lines 98 --ignore-filename-regex 'crates/mt-(perm|server)/'
+        run: cargo llvm-cov report --fail-under-lines 98 --ignore-filename-regex 'crates/mt-server/'
       - name: The server reaches 90 % (it is also covered by the browser tests)
         run: cargo llvm-cov report --fail-under-lines 90 --ignore-filename-regex 'crates/mt-(core|cluster|audit|refdata|query|formula|perm)/'
 
