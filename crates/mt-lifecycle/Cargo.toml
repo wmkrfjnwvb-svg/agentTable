@@ -1,0 +1,20 @@
+[package]
+name = "mt-lifecycle"
+description = "Process: lifecycles with state categories and guarded transitions, business calendars, SLA clocks, and the approval engine (pure, sans-IO state machines)."
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+
+[dependencies]
+mt-core = { path = "../mt-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+rust_decimal = { workspace = true }
+
+[lints]
+workspace = true

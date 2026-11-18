@@ -90,7 +90,7 @@ jobs:
       - name: Engine crates reach 98 %
         run: cargo llvm-cov report --fail-under-lines 98 --ignore-filename-regex 'crates/mt-server/'
       - name: The server reaches 90 % (it is also covered by the browser tests)
-        run: cargo llvm-cov report --fail-under-lines 90 --ignore-filename-regex 'crates/mt-(core|cluster|audit|refdata|query|formula|perm)/'
+        run: cargo llvm-cov report --fail-under-lines 90 --ignore-filename-regex 'crates/mt-(core|cluster|audit|refdata|query|formula|perm|lifecycle)/'
 
   web:
     name: Web app

@@ -596,6 +596,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mt-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "mt-core",
+ "proptest",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "mt-perm"
 version = "0.1.0"
 dependencies = [

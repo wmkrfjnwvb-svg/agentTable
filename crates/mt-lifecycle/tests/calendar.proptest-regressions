@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5ab41762c15d4dd670eafea10b038fefd8155e88534d9c1ffe4a8ab08424631c # shrinks to cal = BusinessCalendar { week: [[(0, 1)], [(0, 1)], [(0, 1)], [(0, 1)], [(0, 1)], [], []], holidays: {}, utc_offset_minutes: 0 }, start = 2026-11-10T00:00:00.017Z, minutes = 2615
