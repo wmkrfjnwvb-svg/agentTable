@@ -120,7 +120,8 @@ pub enum Scope {
     /// Records the principal owns: named in one of the table's ownership fields (owner,
     /// assignee, requester, creator).
     Own,
-    /// Records owned by the principal or by one of the principal's groups.
+    /// Records owned by the principal, by one of the principal's groups, or by anyone in
+    /// those groups.
     Team,
     /// Records for which a condition holds; `me` in the condition is the principal.
     Where {

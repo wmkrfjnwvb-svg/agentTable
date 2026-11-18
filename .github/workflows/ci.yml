@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  lint:
+    name: Format and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: scripts/ci-toolchain.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+      - name: cargo fmt
+        run: cargo fmt --all --check
+      - name: cargo clippy (all crates, all targets, warnings are errors)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: scripts/ci-toolchain.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+      - name: cargo test (unit, integration, property and simulation tests, doc tests)
+        run: cargo test --workspace --locked --no-fail-fast
+
+  wasm:
+    name: WebAssembly build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: scripts/ci-toolchain.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+      - name: Build every crate for wasm32-unknown-unknown
+        run: cargo build --workspace --locked --target wasm32-unknown-unknown
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: scripts/ci-toolchain.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: coverage
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Line coverage per file and in total (target 98 %)
+        run: |
+          cargo llvm-cov --workspace --locked --summary-only | tee coverage.txt
+          {
+            echo '### Line coverage'
+            echo '```'
+            cat coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Enforce the coverage target
+        # mt-perm is under construction: its engine tests are being written. The exception
+        # below is removed in the commit that adds them; every other crate must reach 98 %.
+        run: cargo llvm-cov report --fail-under-lines 98 --ignore-filename-regex 'crates/mt-perm/'

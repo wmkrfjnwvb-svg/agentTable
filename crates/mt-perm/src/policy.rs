@@ -297,7 +297,13 @@ fn scope_admits(
         Scope::All => true,
         Scope::Own => owned_by(&BTreeSet::from([principal])),
         Scope::Team => {
-            let mut owners = env.directory.groups_of(principal);
+            // The principal, their groups, and everyone in those groups.
+            let groups = env.directory.groups_of(principal);
+            let mut owners: BTreeSet<PrincipalId> = groups
+                .iter()
+                .flat_map(|group| env.directory.members_of(*group))
+                .collect();
+            owners.extend(groups);
             owners.insert(principal);
             owned_by(&owners)
         }
@@ -917,6 +923,10 @@ impl Policy {
                     Some(Reason::Elsewhere)
                 } else if kind == PrincipalKind::Guest && request.capability.is_administrative() {
                     Some(Reason::Administrative)
+                } else if !request.capability.is_record_scoped() && grant.is_narrowed() {
+                    // A grant limited to some records or fields gives only actions on
+                    // records, even when its capability set contains others.
+                    Some(Reason::OutOfScope)
                 } else {
                     match request
                         .record
@@ -1161,6 +1171,9 @@ impl Policy {
                 continue;
             }
             for (capability, _) in self.given(grant) {
+                if grant.is_narrowed() && !capability.is_record_scoped() {
+                    continue;
+                }
                 held.insert(capability.clone());
                 if let Capability::Builtin(action) = capability {
                     held.extend(action.includes().iter().map(|a| Capability::Builtin(*a)));

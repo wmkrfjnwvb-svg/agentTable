@@ -1,11 +1,39 @@
 # Multidimensional Table Platform (working name)
 
+[![CI](https://github.com/wmkrfjnwvb-svg/agentTable/actions/workflows/ci.yml/badge.svg)](https://github.com/wmkrfjnwvb-svg/agentTable/actions/workflows/ci.yml)
+
 Open-source, AI-native multidimensional table platform for running business processes out of the box.
 All-Rust backend with OpenAPI Public and Admin APIs, web app in React + TypeScript (reusing Rust via
 WebAssembly); a Tauri 2 + React client app is planned. Licence: Apache-2.0.
 
 ## Status
-Design phase complete; engineering starts with milestone M0 (scaffold, CI, spikes).
+Engineering follows the waves of [doc 21](docs/21-development-plan.md). Every crate is pure Rust,
+builds natively and for WebAssembly, and is tested in six categories (standard, edge, invalid,
+anomalous, concurrency, cross-platform) plus property, model and simulation tests.
+
+| Wave | Crate | Purpose | State |
+|---|---|---|---|
+| 1 | `mt-core` | Values, money, time, IDs, field definitions and field types, validation library, conditions, sort keys, provenance | done |
+| 1 | `mt-cluster` | Single-binary N-to-N cluster: gossip membership, placement, fencing, leases (simulated) | done |
+| 1 | `mt-audit` | Hash-chained audit log, signed checkpoints, tamper localisation | done |
+| 2 | `mt-refdata` | Reference data, versioned changes with four-eyes approval, parameters | done |
+| 2 | `mt-query` | Filter, search, sort, group, totals, views | done |
+| 2 | `mt-formula` | Formula language, type checker, bounded evaluator, dependency graph | done |
+| 2 | `mt-perm` | Capabilities, grants, separation of duties, field permissions, explain | in progress |
+| 2 | `mt-lifecycle` | States, transitions, SLA clocks, approvals | next |
+| 3–8 | storage, API, server, automation, AI, web app | see doc 21 | planned |
+
+Audits per wave: [`docs/audit/`](docs/audit/).
+
+## Build and test
+```bash
+scripts/ci-toolchain.sh                      # the pinned toolchain (rust-toolchain.toml)
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build --workspace --target wasm32-unknown-unknown
+cargo llvm-cov --workspace --summary-only    # target: 98 % of lines
+```
 
 ## Documents (read in this order)
 | Doc | Purpose |
