@@ -811,7 +811,7 @@ fn std_separation_of_duties_when_holding() {
     );
     // A set change that would bring them together is refused and changes nothing.
     policy
-        .add_set(set(6, "Maintainer", &[maintain.clone()]))
+        .add_set(set(6, "Maintainer", std::slice::from_ref(&maintain)))
         .unwrap();
     give(&mut policy, &world, set_grant(4, CAROL, 6, ORDERS));
     give(&mut policy, &world, grant(7, CAROL, read(), ORDERS));
@@ -918,7 +918,7 @@ fn std_separation_of_duties_on_one_record() {
     assert!(decide(&[]).allowed);
     assert!(decide(&[read()]).allowed);
     // … but not approving one's own request.
-    let decision = decide(&[create.clone()]);
+    let decision = decide(std::slice::from_ref(&create));
     assert!(!decision.allowed);
     assert_eq!(
         decision.chain.len(),
@@ -1172,8 +1172,7 @@ fn std_field_permissions() {
         Actor::agent(p(AGENT), p(BOB)),
         Some(&record),
     ) {
-        let expected = if id == STATUS { Visible } else { Visible };
-        assert_eq!((visibility, editable), (expected, false), "{id}");
+        assert_eq!((visibility, editable), (Visible, false), "{id}");
     }
     // The agent alone without unmasking for Carol, who may read but holds no clearance.
     give(&mut policy, &world, grant(40, CAROL, read(), ORDERS));

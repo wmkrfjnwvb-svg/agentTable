@@ -1,5 +1,10 @@
 name: CI
 
+# Every push and pull request: lint, all Rust tests, WebAssembly build, coverage, the web app,
+# installable packages for Linux, macOS and Windows, and browser end-to-end tests against the
+# Linux package with screenshots. Pushes to main also refresh the "nightly" pre-release, so the
+# latest packages and screenshots can be downloaded from the Releases page.
+
 on:
   push:
     branches: [main]
@@ -23,7 +28,7 @@ jobs:
     name: Format and clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install the pinned toolchain (rust-toolchain.toml)
         run: scripts/ci-toolchain.sh
       - uses: Swatinem/rust-cache@v2
@@ -35,36 +40,36 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
-    name: Tests
+    name: Rust tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install the pinned toolchain (rust-toolchain.toml)
         run: scripts/ci-toolchain.sh
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: test
-      - name: cargo test (unit, integration, property and simulation tests, doc tests)
+      - name: cargo test (unit, integration, property, simulation, API and doc tests)
         run: cargo test --workspace --locked --no-fail-fast
 
   wasm:
     name: WebAssembly build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install the pinned toolchain (rust-toolchain.toml)
         run: scripts/ci-toolchain.sh
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: wasm
-      - name: Build every crate for wasm32-unknown-unknown
-        run: cargo build --workspace --locked --target wasm32-unknown-unknown
+      - name: Build every pure crate for wasm32-unknown-unknown
+        run: cargo build --workspace --exclude mt-server --locked --target wasm32-unknown-unknown
 
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install the pinned toolchain (rust-toolchain.toml)
         run: scripts/ci-toolchain.sh
       - uses: Swatinem/rust-cache@v2
@@ -73,7 +78,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
-      - name: Line coverage per file and in total (target 98 %)
+      - name: Line coverage per file and in total
         run: |
           cargo llvm-cov --workspace --locked --summary-only | tee coverage.txt
           {
@@ -82,7 +87,181 @@ jobs:
             cat coverage.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Enforce the coverage target
-        # mt-perm is under construction: its engine tests are being written. The exception
-        # below is removed in the commit that adds them; every other crate must reach 98 %.
-        run: cargo llvm-cov report --fail-under-lines 98 --ignore-filename-regex 'crates/mt-perm/'
+      - name: Engine crates reach 98 %
+        # mt-perm's share-link and review tests are still being written; that exception is
+        # removed in the commit that adds them.
+        run: cargo llvm-cov report --fail-under-lines 98 --ignore-filename-regex 'crates/mt-(perm|server)/'
+      - name: The server reaches 90 % (it is also covered by the browser tests)
+        run: cargo llvm-cov report --fail-under-lines 90 --ignore-filename-regex 'crates/mt-(core|cluster|audit|refdata|query|formula|perm)/'
+
+  web:
+    name: Web app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install, type-check and build
+        working-directory: apps/web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+          retention-days: 7
+
+  package:
+    name: Package (${{ matrix.platform }})
+    needs: web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-latest
+          - platform: macos-universal
+            os: macos-latest
+          - platform: windows-x86_64
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: scripts/ci-toolchain.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: package-${{ matrix.platform }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+      - name: Build (Linux, static so it runs on any distribution)
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --release --locked -p mt-server --target x86_64-unknown-linux-musl
+          echo "BINARY=target/x86_64-unknown-linux-musl/release/agenttable" >> "$GITHUB_ENV"
+      - name: Build (macOS, Apple Silicon and Intel in one binary)
+        if: matrix.platform == 'macos-universal'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo build --release --locked -p mt-server --target aarch64-apple-darwin
+          cargo build --release --locked -p mt-server --target x86_64-apple-darwin
+          mkdir -p target/universal
+          lipo -create -output target/universal/agenttable \
+            target/aarch64-apple-darwin/release/agenttable target/x86_64-apple-darwin/release/agenttable
+          echo "BINARY=target/universal/agenttable" >> "$GITHUB_ENV"
+      - name: Build (Windows)
+        if: matrix.platform == 'windows-x86_64'
+        run: |
+          cargo build --release --locked -p mt-server
+          echo "BINARY=target/release/agenttable.exe" >> "$GITHUB_ENV"
+      - name: Smoke test the binary
+        run: |
+          "$BINARY" --port 18181 --data smoke.json &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:18181/api/status && break; sleep 1; done
+          curl -sf http://127.0.0.1:18181/ | grep -q '<div id="root">'
+          kill %1 || true
+      - name: Assemble the package
+        run: echo "PACKAGE=$(scripts/package.sh "$BINARY" ${{ matrix.platform }})" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agenttable-${{ matrix.platform }}
+          path: ${{ env.PACKAGE }}
+          retention-days: 30
+
+  e2e:
+    name: End-to-end (browser)
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: agenttable-linux-x86_64
+          path: package
+      - name: Unpack the Linux package (the exact file people download)
+        run: |
+          tar -xzf package/*.tar.gz -C package
+          echo "AGENTTABLE_BIN=$(ls -d "$PWD"/package/agenttable-*/agenttable)" >> "$GITHUB_ENV"
+      - name: Install Playwright and Chromium
+        working-directory: apps/web
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Run the end-to-end tests
+        working-directory: apps/web
+        run: npx playwright test
+      - name: List the screenshots in the summary
+        if: always()
+        run: |
+          {
+            echo '### End-to-end screenshots'
+            echo 'Download the **agenttable-e2e-screenshots** artifact below (or the nightly release) to view them.'
+            echo
+            for f in apps/web/e2e/screenshots/*.png; do [ -e "$f" ] && echo "- $(basename "$f")"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agenttable-e2e-screenshots
+          path: apps/web/e2e/screenshots
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agenttable-e2e-report
+          path: apps/web/e2e/report
+          retention-days: 30
+
+  nightly:
+    name: Publish the nightly packages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, test, wasm, coverage, e2e]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect the files
+        run: |
+          mkdir -p release
+          find artifacts -name 'agenttable-*.tar.gz' -o -name 'agenttable-*.zip' | xargs -I{} cp {} release/
+          (cd artifacts/agenttable-e2e-screenshots && zip -qr ../../release/e2e-screenshots.zip .)
+          (cd artifacts/agenttable-e2e-report && zip -qr ../../release/e2e-report.zip .)
+          ls -l release
+      - name: Replace the nightly pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete nightly --yes --cleanup-tag || true
+          cat > notes.md <<EOF
+          Latest build of \`main\` (${GITHUB_SHA::7}), with every check passed: lint, all Rust tests,
+          the WebAssembly build, coverage, and the browser end-to-end tests.
+
+          **Run it:** download the package for your system, unpack it, and start
+          \`start.bat\` (Windows), \`start.command\` (macOS) or \`start.sh\` (Linux). The browser
+          opens at http://127.0.0.1:8080. See README.txt inside the package.
+
+          **See it:** \`e2e-screenshots.zip\` holds a screenshot of every end-to-end step;
+          \`e2e-report.zip\` is the Playwright report (open index.html).
+          EOF
+          gh release create nightly release/* --prerelease --target "$GITHUB_SHA" \
+            --title "Nightly ($(date -u +%Y-%m-%d) · ${GITHUB_SHA::7})" --notes-file notes.md

@@ -19,11 +19,21 @@ anomalous, concurrency, cross-platform) plus property, model and simulation test
 | 2 | `mt-refdata` | Reference data, versioned changes with four-eyes approval, parameters | done |
 | 2 | `mt-query` | Filter, search, sort, group, totals, views | done |
 | 2 | `mt-formula` | Formula language, type checker, bounded evaluator, dependency graph | done |
-| 2 | `mt-perm` | Capabilities, grants, separation of duties, field permissions, explain | in progress |
+| 2 | `mt-perm` | Capabilities, grants, separation of duties, field permissions, explain | in the product; share-link and review tests pending |
 | 2 | `mt-lifecycle` | States, transitions, SLA clocks, approvals | next |
-| 3–8 | storage, API, server, automation, AI, web app | see doc 21 | planned |
+| — | `mt-server` + `apps/web` | End-to-end build: one binary with the web app; placeholders for what is not built yet | live, grows every wave |
+| 3–8 | storage, API, identity, automation, AI, real-time grid | see doc 21 | planned |
 
 Audits per wave: [`docs/audit/`](docs/audit/).
+
+## Try it
+Every push to `main` publishes installable packages for Windows, macOS and Linux under
+[Releases → nightly](https://github.com/wmkrfjnwvb-svg/agentTable/releases/tag/nightly), together
+with screenshots of every end-to-end test step. Unpack, start `start.bat` / `start.command` /
+`start.sh`, and the browser opens the product: a purchasing workspace where everything built so
+far works end to end, and what is still to come is marked as a placeholder. Switch between the
+demo people at the top right to see access control at work. (The same files are attached to
+each CI run as artifacts.)
 
 ## Build and test
 ```bash
@@ -33,6 +43,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace --target wasm32-unknown-unknown
 cargo llvm-cov --workspace --summary-only    # target: 98 % of lines
+(cd apps/web && npm ci && npm run build)     # the web app
+cargo run --release -p mt-server -- --open   # the product at http://127.0.0.1:8080
+(cd apps/web && AGENTTABLE_BIN=../../target/release/agenttable npx playwright test)  # browser E2E
 ```
 
 ## Documents (read in this order)
