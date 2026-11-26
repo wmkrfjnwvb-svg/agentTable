@@ -51,6 +51,11 @@ impl ApiError {
         ApiError::new(404, "not_found", format!("{} does not exist", what.into()))
     }
 
+    /// 410: it existed, but it is no longer available (an expired or withdrawn link).
+    pub fn gone(message: impl Into<String>) -> Self {
+        ApiError::new(410, "gone", message)
+    }
+
     /// 409: the change conflicts with the current state.
     pub fn conflict(message: impl Into<String>) -> Self {
         ApiError::new(409, "conflict", message)

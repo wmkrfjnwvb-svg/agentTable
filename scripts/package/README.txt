@@ -28,7 +28,7 @@ Command line
 Build your own
 --------------
 A new workspace is empty: you are Alice Admin, who may do everything. Build a base the way
-the end-to-end test does (screenshots build-01 … build-28 on the release page):
+the end-to-end test does (screenshots build-01 … build-31 on the release page):
 
   1. Home → "Start from scratch": create a base, e.g. "Expenses".
   2. Code lists: a list of expense categories (a tree: Travel › Flights, Hotels; Meals).
@@ -51,6 +51,12 @@ the end-to-end test does (screenshots build-01 … build-28 on the release page)
      read, review and pay (up to 10,000 USD) for the finance team.
  10. Sign in as Mia, enter and submit a claim; as Max approve it in Approvals; as Fiona review
      and pay it; as Mia read the inbox.
+ 11. Access can be narrowed further: a grant on a table may cover only some fields (or all but
+     some) and run from / until a date. An access review lets someone other than the holder
+     keep or revoke each grant of a base (a revocation needs a note); completing it revokes.
+ 12. "Share…" on a record makes a read-only link for people without an account: this record
+     or the whole table, with fields left out and an expiry. It never shows more than its
+     maker may see, never links to other tables, and stops working when withdrawn.
 
 Or install the purchasing sample from the template gallery on the Home page (or start with
 --demo): suppliers, purchase requests with lines, cost centres, approvals routed by limits

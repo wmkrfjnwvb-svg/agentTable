@@ -164,6 +164,19 @@ pub fn routes() -> Router<Shared> {
             "/api/access/grants/{grant}",
             axum::routing::delete(revoke_grant),
         )
+        .route("/api/access/reviews", post(open_review))
+        .route(
+            "/api/access/reviews/{review}/decisions",
+            post(decide_review),
+        )
+        .route(
+            "/api/access/reviews/{review}/complete",
+            post(complete_review),
+        )
+        .route("/api/access/reviews/{review}/cancel", post(cancel_review))
+        .route("/api/tables/{table}/shares", post(create_share))
+        .route("/api/shares/{share}", axum::routing::delete(revoke_share))
+        .route("/api/share/{token}", get(open_share))
         .route("/api/access/sets", post(create_set))
         .route("/api/access/rules", post(add_rule))
         .route("/api/templates", get(templates))
@@ -737,6 +750,16 @@ fn record_json(
         "modifiedAt": record.modified_at,
         "version": record.version,
         "process": crate::process::record_json(ws, actor, table, record, now),
+        "canShare": ws
+            .decide(
+                actor,
+                &Action::ShareManage.into(),
+                table.resource(),
+                None,
+                &[],
+                now,
+            )
+            .allowed,
     }))
 }
 
@@ -1853,7 +1876,7 @@ async fn access_overview(State(app): State<Shared>, headers: HeaderMap) -> Reply
             app.clock.now(),
         )
         .allowed;
-    let mut overview = crate::access::overview(&ws);
+    let mut overview = crate::access::overview(&ws, app.clock.now(), manage);
     if let JsonValue::Object(map) = &mut overview {
         map.insert("canManage".to_owned(), json!(manage));
     }
@@ -1882,6 +1905,136 @@ async fn revoke_grant(
     crate::access::revoke(&mut ws, actor, parse(&grant, "grant")?, app.clock.now())?;
     app.save(&ws)?;
     Ok(Json(json!({"revoked": true})))
+}
+
+async fn open_review(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(spec): Json<crate::access::ReviewSpec>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let id = crate::access::open_review(&mut ws, actor, &spec, app.clock.now())?;
+    app.save(&ws)?;
+    Ok(Json(json!({"id": id})))
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewDecision {
+    grant: String,
+    verdict: mt_perm::Verdict,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+async fn decide_review(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(review): Path<String>,
+    Json(body): Json<ReviewDecision>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    crate::access::decide_review(
+        &mut ws,
+        actor,
+        parse(&review, "access review")?,
+        (parse(&body.grant, "grant")?, body.verdict),
+        body.note,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"decided": true})))
+}
+
+async fn complete_review(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(review): Path<String>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let revoked = crate::access::complete_review(
+        &mut ws,
+        actor,
+        parse(&review, "access review")?,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"completed": true, "revoked": revoked})))
+}
+
+async fn cancel_review(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(review): Path<String>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    crate::access::cancel_review(
+        &mut ws,
+        actor,
+        parse(&review, "access review")?,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"cancelled": true})))
+}
+
+/// A secret for a share link's address: 24 random bytes from the operating system.
+fn share_token() -> ApiResult<String> {
+    let mut bytes = [0_u8; 24];
+    getrandom::fill(&mut bytes)
+        .map_err(|e| ApiError::internal(format!("no randomness for the link: {e}")))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+async fn create_share(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+    Json(spec): Json<crate::access::ShareSpec>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let token = share_token()?;
+    let id = crate::access::create_share(
+        &mut ws,
+        actor,
+        parse(&table, "table")?,
+        &spec,
+        token.clone(),
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"id": id, "token": token})))
+}
+
+async fn revoke_share(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(share): Path<String>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    crate::access::revoke_share(
+        &mut ws,
+        actor,
+        parse(&share, "share link")?,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"withdrawn": true})))
+}
+
+/// Opened by whoever holds the link: no identity is read.
+async fn open_share(State(app): State<Shared>, Path(token): Path<String>) -> Reply {
+    let ws = app.ws.lock().await;
+    Ok(Json(crate::access::open_share(
+        &ws,
+        &token,
+        app.clock.now(),
+    )?))
 }
 
 #[derive(Debug, Deserialize)]

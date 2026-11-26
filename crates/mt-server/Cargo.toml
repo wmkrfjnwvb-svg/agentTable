@@ -24,6 +24,7 @@ thiserror = { workspace = true }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 rust-embed = { version = "8", features = ["mime-guess"] }
+getrandom = "0.3"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

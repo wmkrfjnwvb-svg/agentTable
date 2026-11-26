@@ -94,7 +94,7 @@ lines (gate 98%).
 | Rules: one engine for every path; agents are principals | dual identity (`Actor::on_behalf_of`); the product asks it for screens, lists, fields, approvers and transitions | Met |
 | Acceptance: a permission-matrix suite per template | The purchasing template has a matrix of seven people in `tests/api.rs`; the expense configuration a matrix of four in `tests/builder.rs` | Met for the two configurations; a generic per-template runner: wave 6 (templates) |
 | Acceptance: no AI or API path can read hidden fields | API: hidden fields are never returned, filtering or sorting by them is refused (`tests/api.rs`); AI path: wave 6 | Met for the API |
-| On screen | Grants (who, what, where, which records, limit, why), revocation, sets, SoD rules, explain | Met; field access, validity, share links and reviews on screen: R2-09 |
+| On screen | Grants (who, what, where, which records, which fields, limit, from / until, why), revocation, sets, SoD rules, explain, access reviews, share links | Met (R2-09) |
 
 ### 2.7 C6 process — `mt-lifecycle`
 
@@ -136,7 +136,7 @@ lines (gate 98%).
 | R2-06 | — | Code-list changes in the product bypass the versioned ledger (no history, no four eyes) | **Deferred to wave 3** (the ledger is stored with the store) |
 | R2-07 | — | SLA clocks and calendars are not attached to lifecycle states yet | **Deferred to wave 5** (timers need the job queue with leases, wave 3) |
 | R2-08 | — | The designer does not offer quorum, parallel blocks, fill-in steps or timeouts, which the engine has | **Fixed**: all four in the designer; test `std_quorum_parallel_fill_in_and_timeouts`; browser steps build-21 … build-25 |
-| R2-09 | — | The Access page does not offer field access, validity, share links or reviews, which the engine has | **Next builder increment** |
+| R2-09 | — | The Access page does not offer field access, validity, share links or reviews, which the engine has | **Fixed**: grants on a table take “only” / “all but” fields and a period; reviews (open on a place, keep / revoke with a note, complete revokes, cancel) and read-only share links (a record or a table, fields left out, expiry, withdrawal, an anonymous page). Tests `std_grants_limited_to_fields_and_to_a_period`, `std_access_reviews_keep_or_revoke_with_a_note`, `std_share_links_show_one_table_and_never_more_than_their_maker_sees`, `edge_share_links_expire`; browser steps build-29 … build-31 |
 | R2-10 | — | Query results on the three databases | **Wave 3** (SQL compiler compared with `mt-query::run`) |
 | R2-11 | — | Full recompute after each change | **Wave 3** (`mt-ops`, incremental from the dependency graph) |
 | R2-12 | — | `required_when` is not enforced by the product and has no editor | **Fixed**: editor, enforcement on save and on forward transitions (withdraw / cancel are never blocked); test `std_fields_required_only_when_a_condition_holds`; browser step build-28 |

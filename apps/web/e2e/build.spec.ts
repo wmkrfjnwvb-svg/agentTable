@@ -522,6 +522,85 @@ test.describe.serial("build your own: expense claims from scratch", () => {
     await page.getByTestId("close-panel").click();
   });
 
+  test("access is narrowed to some fields and a period, then reviewed", async () => {
+    await page.getByTestId("nav-access").click();
+    await page.getByTestId("grant-to").selectOption({ label: "Fiona Finance" });
+    await page.getByTestId("grant-kind").selectOption("capability");
+    await page.getByTestId("grant-capability").fill("record.read");
+    await page.getByTestId("grant-place").selectOption({ label: "  the table Expense claims" });
+    await page.getByTestId("grant-scope").selectOption("all");
+    await page.getByTestId("grant-fields-mode").selectOption("only");
+    await page.getByTestId("grant-fields-Trip purpose").click();
+    await page.getByTestId("grant-fields-Total").click();
+    await page.getByTestId("grant-until").fill("2099-12-31");
+    await page.getByTestId("grant-reason").fill("Year-end audit");
+    await page.getByTestId("give-grant").click();
+    await expect(page.getByTestId("access-message")).toHaveText("Given.");
+    const auditGrant = page.getByTestId("grant-row").filter({ hasText: "Year-end audit" });
+    await expect(auditGrant).toContainText("only “Trip purpose”, “Total”");
+    await expect(auditGrant).toContainText("until 2099-12-31");
+    // A review of everything given in the base: someone other than the holder decides.
+    await page.getByTestId("review-name").fill("Q4 expenses");
+    await page.getByTestId("review-place").selectOption({ label: "the base Expenses" });
+    await page.getByTestId("review-due").fill("2099-01-31");
+    await page.getByTestId("open-review").click();
+    await expect(page.getByTestId("access-message")).toHaveText("Review opened.");
+    const review = page.getByTestId("review-Q4 expenses");
+    const items = review.getByTestId("review-item");
+    await expect(items).toHaveCount(6);
+    for (let i = 0; i < 6; i++) {
+      const item = items.nth(i);
+      if ((await item.textContent())?.includes("Fiona Finance")) continue;
+      await item.getByRole("button", { name: "Keep" }).click();
+      await expect(item.getByTestId("verdict")).toContainText("keep");
+    }
+    const fiona = items.filter({ hasText: "Fiona Finance" });
+    await fiona.getByRole("button", { name: "Revoke" }).click();
+    await expect(page.getByTestId("access-message")).toContainText("needs a note");
+    await fiona.getByTestId("note-Fiona Finance").fill("The audit moved to January");
+    await fiona.getByRole("button", { name: "Revoke" }).click();
+    await expect(fiona.getByTestId("verdict")).toContainText("revoke");
+    await expect(review.getByTestId("review-state")).toHaveText("6 of 6 decided");
+    await review.scrollIntoViewIfNeeded();
+    await shot(page, "29-access-review");
+    await review.getByTestId("complete-review").click();
+    await expect(page.getByTestId("access-message")).toHaveText("Review completed.");
+    await expect(review.getByTestId("review-state")).toContainText("completed by Alice Admin");
+    await expect(page.getByTestId("grant-row").filter({ hasText: "Year-end audit" })).toContainText("revoked");
+  });
+
+  test("a claim is shared with someone without an account, then the link is withdrawn", async ({ browser }) => {
+    await openTable(page, "Expense claims");
+    await row(page, "Conference Lisbon").click();
+    await page.getByTestId("share").click();
+    await page.getByTestId("share-fields-mode").selectOption("except");
+    await page.getByTestId("share-fields-Needs finance").click();
+    await page.getByTestId("share-expires").fill("2099-12-31");
+    await page.getByTestId("create-share").click();
+    const url = await page.getByTestId("share-url").inputValue();
+    expect(url).toContain("#/share/");
+    await page.getByTestId("share-url").scrollIntoViewIfNeeded();
+    await shot(page, "30-share-link");
+    const outsider = await browser.newContext();
+    const guest = await outsider.newPage();
+    await guest.goto(url);
+    await expect(guest.getByTestId("shared-title")).toHaveText("Conference Lisbon");
+    await expect(guest.getByTestId("shared-by")).toContainText("Shared by Alice Admin · until 2099-12-31");
+    await expect(guest.getByTestId("shared-Total")).toHaveText("450.00 USD");
+    await expect(guest.getByTestId("shared-Receipt")).toHaveText("https://receipts.example/lisbon");
+    await expect(guest.getByTestId("shared-record")).not.toContainText("Needs finance");
+    await expect(guest.getByTestId("shared-record")).not.toContainText("Conference ticket");
+    await shot(guest, "31-shared-record");
+    await page.getByTestId("close-panel").click();
+    await page.getByTestId("nav-access").click();
+    await expect(page.getByTestId("shares")).toContainText("Expense claims › Conference Lisbon");
+    await page.getByTestId("withdraw-Conference Lisbon").click();
+    await expect(page.getByTestId("access-message")).toHaveText("Link withdrawn.");
+    await guest.reload();
+    await expect(guest.getByTestId("shared-error")).toHaveText("This link was withdrawn.");
+    await outsider.close();
+  });
+
   test("a template installs next to what was built", async () => {
     await page.getByTestId("nav-home").click();
     await page.getByTestId("install-purchasing").click();
@@ -534,7 +613,7 @@ test.describe.serial("build your own: expense claims from scratch", () => {
 
   test("everything built is in the audit chain", async () => {
     await page.getByTestId("nav-audit").click();
-    for (const action of ["base.create", "refset.create", "table.create", "field.create", "setting.update", "member.create", "process.publish", "access.grant", "approval.approve", "template.install"]) {
+    for (const action of ["base.create", "refset.create", "table.create", "field.create", "setting.update", "member.create", "process.publish", "access.grant", "approval.approve", "access.review.complete", "share.create", "share.revoke", "template.install"]) {
       await expect(page.getByTestId("audit-entries")).toContainText(action);
     }
     await page.getByTestId("verify").click();

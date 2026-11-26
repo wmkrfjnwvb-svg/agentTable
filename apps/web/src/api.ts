@@ -117,6 +117,7 @@ export type RecordDetail = {
   modifiedAt: string;
   version: number;
   process: ProcessInfo | null;
+  canShare: boolean;
 };
 
 export type MyTask = {
@@ -200,6 +201,57 @@ export type FieldPatch = { name?: string; required?: boolean; help?: string; opt
 export type Option = { value: Value | string; label: string; color?: string; path?: string; depth?: number };
 
 export type ApiError = { status: number; code: string; message: string; details?: unknown };
+
+export type GrantRow = {
+  id: string;
+  to: string;
+  toId: string;
+  what: string;
+  on: string;
+  scope: string;
+  limit: string | null;
+  reason: string;
+  grantedBy: string;
+  active: boolean;
+  fields: string | null;
+  validFrom: number | null;
+  validTo: number | null;
+  status: "in_force" | "not_yet" | "ended" | "revoked";
+};
+export type AccessReview = {
+  id: string;
+  name: string;
+  covers: string;
+  state: "open" | "completed" | "cancelled";
+  openedBy: string;
+  openedAt: number;
+  dueAt: number | null;
+  overdue: boolean;
+  closedBy: string | null;
+  done: number;
+  total: number;
+  items: { grant: string; holder: string; holderId: string; what: GrantRow | null; verdict: "keep" | "revoke" | null; note: string | null; reviewer: string | null }[];
+};
+export type ShareRow = {
+  id: string;
+  table: string | null;
+  tableId: string | null;
+  record: string | null;
+  fields: string | null;
+  expiresAt: number | null;
+  createdBy: string;
+  createdAt: number;
+  status: "active" | "withdrawn" | "expired" | "not_yet";
+  token: string | null;
+};
+export type SharedView = {
+  table: string;
+  record: string | null;
+  sharedBy: string;
+  expiresAt: number | null;
+  columns: { id: string; name: string; typeLabel: string; numeric: boolean; primary: boolean }[];
+  records: { id: string; title: string; cells: Record<string, Cell> }[];
+};
 
 let identity: { user: string; onBehalfOf: string } = { user: "", onBehalfOf: "" };
 
@@ -290,14 +342,23 @@ export const api = {
   publishProcess: (table: string, design: unknown) => call<{ design: unknown }>("PUT", `/api/tables/${table}/process`, design),
   access: () =>
     call<{
-      grants: { id: string; to: string; toId: string; what: string; on: string; scope: string; limit: string | null; reason: string; grantedBy: string; active: boolean }[];
+      grants: GrantRow[];
       sets: { id: string; name: string; capabilities: string[] }[];
       rules: { name: string; first: string; second: string; kind: string }[];
+      reviews: AccessReview[];
+      shares: ShareRow[];
       capabilities: string[];
       canManage: boolean;
     }>("GET", "/api/access"),
   giveGrant: (spec: unknown) => call<{ id: string }>("POST", "/api/access/grants", spec),
   revokeGrant: (id: string) => call<{ revoked: boolean }>("DELETE", `/api/access/grants/${id}`),
+  openReview: (name: string, on: unknown, dueAt?: number) => call<{ id: string }>("POST", "/api/access/reviews", { name, on, dueAt }),
+  decideReview: (review: string, grant: string, verdict: "keep" | "revoke", note?: string) => call<{ decided: boolean }>("POST", `/api/access/reviews/${review}/decisions`, { grant, verdict, note }),
+  completeReview: (review: string) => call<{ completed: boolean; revoked: number }>("POST", `/api/access/reviews/${review}/complete`, {}),
+  cancelReview: (review: string) => call<{ cancelled: boolean }>("POST", `/api/access/reviews/${review}/cancel`, {}),
+  createShare: (table: string, spec: { record?: string; fields?: { except: string[] }; expiresAt?: number }) => call<{ id: string; token: string }>("POST", `/api/tables/${table}/shares`, spec),
+  revokeShare: (id: string) => call<{ withdrawn: boolean }>("DELETE", `/api/shares/${id}`),
+  openShare: (token: string) => call<SharedView>("GET", `/api/share/${encodeURIComponent(token)}`),
   createSet: (name: string, capabilities: string[]) => call<{ id: string }>("POST", "/api/access/sets", { name, capabilities }),
   addRule: (name: string, first: string, second: string, kind: string) => call<{ id: string }>("POST", "/api/access/rules", { name, first, second, kind }),
   templates: () => call<Template[]>("GET", "/api/templates"),

@@ -5,6 +5,7 @@ import { AccessPage, AuditPage, OverviewPage, PlaceholderPage, PLACEHOLDERS, Ref
 import { ApprovalsPage, InboxPage } from "./Process";
 import { BasePage, HomePage, PeoplePage, SettingsPage } from "./Build";
 import DesignerPage from "./Designer";
+import { SharedPage } from "./Share";
 
 function useRoute(): string {
   const [route, setRoute] = useState(() => window.location.hash.slice(1) || "/");
@@ -26,7 +27,14 @@ function initial(key: string, fallback: string): string {
   }
 }
 
+/// A share link opens a page of its own, without an account; everything else is the workspace.
 export default function App() {
+  const route = useRoute();
+  if (route.startsWith("/share/")) return <SharedPage token={route.slice(7)} />;
+  return <Workspace />;
+}
+
+function Workspace() {
   const route = useRoute();
   const [people, setPeople] = useState<Person[]>([]);
   const [user, setUser] = useState(() => initial("agenttable.user", ALICE));

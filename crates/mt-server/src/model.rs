@@ -239,6 +239,12 @@ pub struct Data {
     /// Lifecycles, approvals and the inbox.
     #[serde(default)]
     pub process: crate::process::Process,
+    /// Access reviews, open and closed.
+    #[serde(default)]
+    pub reviews: Vec<crate::access::Review>,
+    /// Share links, active and withdrawn.
+    #[serde(default)]
+    pub shares: Vec<crate::access::Share>,
 }
 
 /// A cell as a client sends it: text to read as the field's type, or a structured value

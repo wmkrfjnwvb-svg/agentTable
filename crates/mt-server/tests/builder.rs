@@ -2020,3 +2020,586 @@ async fn std_fields_required_only_when_a_condition_holds() {
         "computed fields fill themselves"
     );
 }
+
+async fn query_as(app: &Arc<App>, table: &str, who: &str) -> Value {
+    call(
+        app,
+        Method::POST,
+        &format!("/api/tables/{table}/query"),
+        Some(who),
+        Some(json!({})),
+    )
+    .await
+    .1
+}
+
+async fn access_as(app: &Arc<App>, who: &str) -> Value {
+    call(app, Method::GET, "/api/access", Some(who), None)
+        .await
+        .1
+}
+
+async fn a_claim_of_600(app: &Arc<App>, x: &Expenses, purpose: &str) -> String {
+    let purpose_field = columns_id(app, &x.claims, "Purpose").await;
+    let (status, claim) = post(
+        app,
+        &format!("/api/tables/{}/records", x.claims),
+        json!({"cells": {&purpose_field: {"text": purpose}}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    let claim = claim["id"].as_str().unwrap().to_owned();
+    let description = columns_id(app, &x.lines, "Description").await;
+    let (status, line) = post(app, &format!("/api/tables/{}/records", x.lines), json!({"cells": {&description: {"text": "Stand"}, &x.amount: {"text": "600"}, &x.claim_link: {"value": {"type": "link", "value": [claim]}}}})).await;
+    assert_eq!(status, StatusCode::OK, "{line}");
+    claim
+}
+
+const DAY: i64 = 86_400_000;
+
+#[tokio::test]
+async fn std_grants_limited_to_fields_and_to_a_period() {
+    let app = empty();
+    let x = build(&app).await;
+    let p = people(&app).await;
+    a_claim_of_600(&app, &x, "Fair").await;
+    let at = |days: i64| now().millis() + days * DAY;
+    // Max reads the claims but not their totals.
+    let (status, body) = grant(&app, json!({"to": p.max, "capability": "record.read", "on": {"kind": "table", "id": x.claims}, "fields": {"except": [x.total]}, "reason": "Approves"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let seen = query_as(&app, &x.claims, &p.max).await;
+    assert_eq!(seen["rows"].as_array().unwrap().len(), 1);
+    assert!(
+        seen["rows"][0]["cells"].get(&x.total).is_none(),
+        "never sent: {}",
+        seen["rows"][0]
+    );
+    assert_eq!(seen["rows"][0]["cells"][&x.needs_finance]["d"], "No");
+    // Mia from tomorrow; Fiona until tomorrow.
+    let (status, _) = grant(&app, json!({"to": p.mia, "capability": "record.read", "on": {"kind": "table", "id": x.claims}, "validFrom": at(1), "reason": "Starts tomorrow"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        query_as(&app, &x.claims, &p.mia).await["rows"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "not yet"
+    );
+    let (status, _) = grant(&app, json!({"to": p.fiona, "capability": "record.read", "on": {"kind": "table", "id": x.claims}, "fields": {"only": [x.total, x.needs_finance]}, "validTo": at(1), "reason": "Audit this week"})).await;
+    assert_eq!(status, StatusCode::OK);
+    let fiona = query_as(&app, &x.claims, &p.fiona).await;
+    assert_eq!(fiona["rows"][0]["cells"][&x.total]["d"], "600.00 USD");
+    let purpose = columns_id(&app, &x.claims, "Purpose").await;
+    assert!(fiona["rows"][0]["cells"].get(&purpose).is_none());
+    let access = access_as(&app, ALICE).await;
+    let find = |to: &str| {
+        access["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["toId"] == to)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(find(&p.max)["fields"], "all but “Total”");
+    assert_eq!(find(&p.mia)["status"], "not_yet");
+    assert_eq!(find(&p.mia)["validFrom"], at(1));
+    assert_eq!(find(&p.fiona)["status"], "in_force");
+    assert_eq!(find(&p.fiona)["fields"], "only “Total”, “Needs finance”");
+    // Refused.
+    for (body, why) in [
+        (
+            json!({"to": p.mia, "capability": "record.read", "on": {"kind": "table", "id": x.claims}, "validTo": at(0)}),
+            "already have ended",
+        ),
+        (
+            json!({"to": p.mia, "capability": "record.read", "on": {"kind": "table", "id": x.claims}, "validFrom": at(2), "validTo": at(1)}),
+            "ends before it starts",
+        ),
+        (
+            json!({"to": p.mia, "capability": "record.read", "on": {"kind": "base", "id": x.base}, "fields": {"only": [x.total]}}),
+            "on one table",
+        ),
+        (
+            json!({"to": p.mia, "capability": "record.read", "on": {"kind": "table", "id": x.claims}, "fields": {"only": []}}),
+            "at least one field",
+        ),
+        (
+            json!({"to": p.mia, "capability": "record.read", "on": {"kind": "table", "id": x.claims}, "fields": {"only": [x.amount]}}),
+            "not a field of",
+        ),
+        (
+            json!({"to": p.mia, "capability": "access.manage", "on": {"kind": "table", "id": x.claims}, "fields": {"only": [x.total]}}),
+            "not about individual records",
+        ),
+    ] {
+        let (status, body) = grant(&app, body).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{why}: {body}");
+        assert!(
+            body["message"].as_str().unwrap().contains(why),
+            "{why}: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn std_access_reviews_keep_or_revoke_with_a_note() {
+    let app = empty();
+    let x = build(&app).await;
+    let p = people(&app).await;
+    let base = json!({"kind": "base", "id": x.base});
+    for body in [
+        json!({"to": p.max, "capability": "record.read", "on": base, "reason": "Approves"}),
+        json!({"to": p.finance, "capability": "record.read", "on": base, "reason": "Pays"}),
+        json!({"to": p.mia, "capability": "record.read", "on": base, "validFrom": now().millis() + DAY, "reason": "Starts tomorrow"}),
+    ] {
+        assert_eq!(grant(&app, body).await.0, StatusCode::OK);
+    }
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        "/api/access/reviews",
+        Some(&p.max),
+        Some(json!({"name": "Q4", "on": base})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "only access managers review");
+    let (status, opened) = post(
+        &app,
+        "/api/access/reviews",
+        json!({"name": "Q4 expenses", "on": base, "dueAt": now().millis() + 7 * DAY}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    let review = opened["id"].as_str().unwrap().to_owned();
+    let access = access_as(&app, ALICE).await;
+    let shown = access["reviews"][0].clone();
+    assert_eq!(shown["covers"], "Expenses");
+    assert_eq!(shown["state"], "open");
+    assert_eq!(
+        shown["total"], 2,
+        "grants in force on the base only: {shown}"
+    );
+    assert_eq!(shown["overdue"], false);
+    let item = |holder: &str| {
+        shown["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["holderId"] == holder)
+            .unwrap()["grant"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (max_grant, finance_grant) = (item(&p.max), item(&p.finance));
+    let decide = |body: Value| {
+        let app = app.clone();
+        let path = format!("/api/access/reviews/{review}/decisions");
+        async move { post(&app, &path, body).await }
+    };
+    let complete = format!("/api/access/reviews/{review}/complete");
+    assert_eq!(
+        decide(json!({"grant": max_grant, "verdict": "keep"}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, body) = post(&app, &complete, json!({})).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "undecided grants: {body}"
+    );
+    let (status, body) = decide(json!({"grant": finance_grant, "verdict": "revoke"})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["message"].as_str().unwrap().contains("needs a note"));
+    assert_eq!(decide(json!({"grant": finance_grant, "verdict": "revoke", "note": "Finance moved to the new base"})).await.0, StatusCode::OK);
+    let (status, body) = post(&app, &complete, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["revoked"], 1);
+    let access = access_as(&app, ALICE).await;
+    let status_of = |id: &str| {
+        access["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["id"] == id)
+            .unwrap()["status"]
+            .clone()
+    };
+    assert_eq!(status_of(&finance_grant), "revoked");
+    assert_eq!(status_of(&max_grant), "in_force");
+    assert_eq!(access["reviews"][0]["state"], "completed");
+    assert_eq!(access["reviews"][0]["closedBy"], "Alice Admin");
+    let (status, _) = post(&app, &complete, json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "closed");
+    assert_eq!(
+        decide(json!({"grant": max_grant, "verdict": "revoke", "note": "late"}))
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // Nobody reviews their own access; a review can be abandoned.
+    let (_, opened) = post(&app, "/api/access/reviews", json!({"name": "Everything"})).await;
+    let everything = opened["id"].as_str().unwrap().to_owned();
+    let access = access_as(&app, ALICE).await;
+    let own = access["reviews"][0]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["holder"] == "Alice Admin")
+        .unwrap()["grant"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, body) = post(
+        &app,
+        &format!("/api/access/reviews/{everything}/decisions"),
+        json!({"grant": own, "verdict": "keep"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["message"].as_str().unwrap().contains("own access"));
+    assert_eq!(
+        post(
+            &app,
+            &format!("/api/access/reviews/{everything}/cancel"),
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post(
+            &app,
+            &format!("/api/access/reviews/{everything}/cancel"),
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // Refused openings.
+    assert_eq!(
+        post(&app, "/api/access/reviews", json!({"name": " "}))
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        post(
+            &app,
+            "/api/access/reviews",
+            json!({"name": "Late", "dueAt": now().millis()})
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        post(
+            &app,
+            "/api/access/reviews",
+            json!({"name": "Lines", "on": {"kind": "table", "id": x.lines}})
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "no grant there"
+    );
+    assert_eq!(
+        post(
+            &app,
+            "/api/access/reviews/arv_00000000000000000000000001/complete",
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, audit) = call(&app, Method::GET, "/api/audit", Some(ALICE), None).await;
+    let text = audit.to_string();
+    for action in [
+        "access.review.open",
+        "access.review.decide",
+        "access.review.complete",
+        "access.review.cancel",
+    ] {
+        assert!(text.contains(action), "{action}");
+    }
+    assert!(
+        text.contains("Finance moved to the new base"),
+        "the note is in the audit trail"
+    );
+}
+
+#[tokio::test]
+async fn std_share_links_show_one_table_and_never_more_than_their_maker_sees() {
+    let app = empty();
+    let x = build(&app).await;
+    let p = people(&app).await;
+    let fair = a_claim_of_600(&app, &x, "Fair").await;
+    a_claim_of_600(&app, &x, "Expo").await;
+    // A link to one claim, without the formula.
+    let path = format!("/api/tables/{}/shares", x.claims);
+    let (status, made) = post(&app, &path, json!({"record": fair, "fields": {"except": [x.needs_finance]}, "expiresAt": now().millis() + DAY})).await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let token = made["token"].as_str().unwrap().to_owned();
+    assert_eq!(token.len(), 48);
+    let (status, opened) = call(
+        &app,
+        Method::GET,
+        &format!("/api/share/{token}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    assert_eq!(opened["table"], "Expense claims");
+    assert_eq!(opened["record"], "Fair");
+    assert_eq!(opened["sharedBy"], "Alice Admin");
+    assert_eq!(opened["records"].as_array().unwrap().len(), 1);
+    let names: Vec<&str> = opened["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"Total") && names.contains(&"Purpose"),
+        "{names:?}"
+    );
+    assert!(!names.contains(&"Needs finance"), "left out by the link");
+    assert!(!names.contains(&"Lines"), "a link opens one table");
+    assert_eq!(opened["records"][0]["cells"][&x.total]["d"], "600.00 USD");
+    assert!(opened["records"][0]["cells"]
+        .get(&x.needs_finance)
+        .is_none());
+    // The token is shown to those who may hand it out, and never written to the audit trail.
+    let access = access_as(&app, ALICE).await;
+    assert_eq!(access["shares"][0]["token"], token.as_str());
+    assert_eq!(access["shares"][0]["record"], "Fair");
+    assert_eq!(access["shares"][0]["status"], "active");
+    assert_eq!(access["shares"][0]["fields"], "all but “Needs finance”");
+    assert!(access_as(&app, &p.max).await["shares"][0]["token"].is_null());
+    let (_, audit) = call(&app, Method::GET, "/api/audit", Some(ALICE), None).await;
+    assert!(audit.to_string().contains("share.create"));
+    assert!(!audit.to_string().contains(&token));
+    // Max may share the claims, but does not see their totals: neither does his link.
+    for body in [
+        json!({"to": p.max, "capability": "record.read", "on": {"kind": "table", "id": x.claims}, "fields": {"except": [x.total]}, "reason": "Approves"}),
+        json!({"to": p.max, "capability": "share.manage", "on": {"kind": "table", "id": x.claims}, "reason": "Shares with auditors"}),
+    ] {
+        assert_eq!(grant(&app, body).await.0, StatusCode::OK);
+    }
+    let (status, made) = call(&app, Method::POST, &path, Some(&p.max), Some(json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    let max_token = made["token"].as_str().unwrap().to_owned();
+    let max_share = made["id"].as_str().unwrap().to_owned();
+    let (_, opened) = call(
+        &app,
+        Method::GET,
+        &format!("/api/share/{max_token}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        opened["records"].as_array().unwrap().len(),
+        2,
+        "the whole table"
+    );
+    assert!(opened["record"].is_null());
+    let names: Vec<&str> = opened["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        !names.contains(&"Total"),
+        "Max cannot see totals: {names:?}"
+    );
+    // When Max loses the right to share, his link stops working.
+    let access = access_as(&app, ALICE).await;
+    let share_grant = access["grants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["what"] == "share.manage")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        call(
+            &app,
+            Method::DELETE,
+            &format!("/api/access/grants/{share_grant}"),
+            Some(ALICE),
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, body) = call(
+        &app,
+        Method::GET,
+        &format!("/api/share/{max_token}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE);
+    assert!(body["message"]
+        .as_str()
+        .unwrap()
+        .contains("may no longer share"));
+    let (status, _) = call(
+        &app,
+        Method::DELETE,
+        &format!("/api/shares/{max_share}"),
+        Some(&p.max),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // Withdrawn, unknown and refused links.
+    assert_eq!(
+        call(
+            &app,
+            Method::DELETE,
+            &format!("/api/shares/{max_share}"),
+            Some(ALICE),
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            Method::DELETE,
+            &format!("/api/shares/{max_share}"),
+            Some(ALICE),
+            None
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (status, body) = call(
+        &app,
+        Method::GET,
+        &format!("/api/share/{max_token}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE);
+    assert_eq!(body["message"], "this link was withdrawn");
+    assert_eq!(
+        call(
+            &app,
+            Method::GET,
+            "/api/share/0123456789abcdef0123456789abcdef0123456789abcdef",
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(&app, Method::GET, "/api/share/short", None, None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(&app, Method::POST, &path, Some(&p.mia), Some(json!({})))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post(&app, &path, json!({"expiresAt": now().millis()}))
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        post(
+            &app,
+            &path,
+            json!({"record": "rec_00000000000000000000000zzz"})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(post(&app, &path, json!({"fields": {"except": [x.total, x.needs_finance, columns_id(&app, &x.claims, "Purpose").await]}})).await.0, StatusCode::OK, "other fields remain");
+    assert_eq!(
+        call(
+            &app,
+            Method::DELETE,
+            "/api/shares/shl_00000000000000000000000001",
+            Some(ALICE),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn edge_share_links_expire() {
+    let dir = std::env::temp_dir().join(format!("agenttable-share-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("data.json");
+    let _ = std::fs::remove_file(&file);
+    let start = now().millis();
+    let app = app_at(&file, start);
+    let x = build(&app).await;
+    a_claim_of_600(&app, &x, "Fair").await;
+    let (_, made) = post(
+        &app,
+        &format!("/api/tables/{}/shares", x.claims),
+        json!({"expiresAt": start + 3_600_000}),
+    )
+    .await;
+    let token = made["token"].as_str().unwrap().to_owned();
+    assert_eq!(
+        call(
+            &app,
+            Method::GET,
+            &format!("/api/share/{token}"),
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    drop(app);
+    let later = app_at(&file, start + 3_600_000);
+    let (status, body) = call(
+        &later,
+        Method::GET,
+        &format!("/api/share/{token}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE);
+    assert_eq!(body["message"], "this link has expired");
+    assert_eq!(
+        access_as(&later, ALICE).await["shares"][0]["status"],
+        "expired"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

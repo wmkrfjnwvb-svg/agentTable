@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError, CellInput, Column, Explanation, Option, RecordDetail, TableInfo, Value } from "./api";
 import { CellView, ExplainList } from "./TablePage";
 import { ProcessSection } from "./Process";
+import { SharePanel } from "./Share";
 
 type Draft = Record<string, CellInput>;
 
@@ -146,6 +147,7 @@ export default function RecordPanel({
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [approval, setApproval] = useState(false);
+  const [sharing, setSharing] = useState(false);
 
   // The record just created: the panel switches to it and keeps saying "Saved.".
   const justCreated = useRef<string | null>(null);
@@ -259,6 +261,15 @@ export default function RecordPanel({
             </button>
             {!creating && record?.actions.delete?.allowed && (
               <button className="danger" onClick={remove} data-testid="delete">Delete</button>
+            )}
+          </div>
+        )}
+        {!creating && record?.canShare && (
+          <div className="panel-section">
+            {sharing ? (
+              <SharePanel tableId={tableId} recordId={record.id} fields={record.fields} onClose={() => setSharing(false)} />
+            ) : (
+              <button className="secondary" onClick={() => setSharing(true)} data-testid="share">Share…</button>
             )}
           </div>
         )}
