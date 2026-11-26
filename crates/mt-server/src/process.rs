@@ -746,6 +746,61 @@ pub fn act(
         .and_then(|t| def.node(&t.node))
         .map(|n| n.name().to_owned())
         .unwrap_or_default();
+    // An approver named by a capability must still hold it when deciding: revoking a right
+    // takes effect on tasks already open, not only on the next approval.
+    let deciding = matches!(
+        act,
+        Act::Approve { .. } | Act::Reject { .. } | Act::Return { .. }
+    );
+    let opened = run.approval.tasks.iter().find(|t| t.id == task);
+    if let (true, Some(opened)) = (deciding, opened) {
+        let by_capability: Vec<&String> = match def.node(&opened.node) {
+            Some(Node::Approval { approvers, .. }) => {
+                let keys: Vec<&String> = approvers
+                    .iter()
+                    .filter_map(|a| match a {
+                        Approver::Capability { capability } => Some(capability),
+                        Approver::Person { .. } | Approver::Field { .. } => None,
+                    })
+                    .collect();
+                if keys.len() == approvers.len() {
+                    keys
+                } else {
+                    Vec::new()
+                }
+            }
+            Some(_) | None => Vec::new(),
+        };
+        if opened.delegated_from.is_none()
+            && opened.assignee == actor.principal
+            && !by_capability.is_empty()
+        {
+            let prior = ws.prior(actor, Some(record));
+            let holds = by_capability.iter().any(|key| {
+                key.parse::<Capability>().is_ok_and(|capability| {
+                    ws.decide(
+                        actor,
+                        &capability,
+                        table.resource(),
+                        Some(record),
+                        &prior,
+                        now,
+                    )
+                    .allowed
+                })
+            });
+            if !holds {
+                return Err(ApiError::forbidden(
+                    format!(
+                        "{} no longer may “{}” this record: ask an administrator to reassign the task",
+                        ws.name_of(actor.principal),
+                        by_capability.iter().map(|k| k.as_str()).collect::<Vec<_>>().join("” or “")
+                    ),
+                    Json::Null,
+                ));
+            }
+        }
+    }
     let mut approval = run.approval.clone();
     let event = Event::Act {
         task,

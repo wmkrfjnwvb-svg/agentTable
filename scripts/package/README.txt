@@ -65,8 +65,7 @@ to become another person:
   Purchasing assistant (AI agent) — acting for someone, sees exactly what they see
 
 Not built yet (shown as placeholders): automations, email/chat notifications, dashboards,
-the AI assistant. Storage is
-one JSON file until the database layer arrives; sign-in is a demo switcher until real
-identity arrives.
+the AI assistant. Storage is one JSON file until the database layer arrives; sign-in is a
+demo switcher until real identity arrives.
 
 Licence: Apache-2.0. Source and progress: https://github.com/wmkrfjnwvb-svg/agentTable

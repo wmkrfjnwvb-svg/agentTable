@@ -13,6 +13,7 @@ use common::*;
 use mt_core::field::Classification;
 use mt_core::id::{AccessReviewId, GrantId, PrincipalId, RecordId, ShareLinkId};
 use mt_perm::review::MAX_REVIEW_ITEMS;
+use mt_perm::Directory;
 use mt_perm::{
     AccessReview, Action, Capability, FieldAccess, FieldMeta, FieldPermission, Inactive, PermError,
     Reason, ReviewState, ShareLink, ShareMode, Verdict, Visibility,
@@ -476,5 +477,99 @@ proptest! {
             prop_assert_eq!(review.progress(), (decided, 3));
         }
         let _ = PrincipalId::from_u128(0);
+    }
+}
+
+// ---- model-based: the review against a reference ----
+
+#[derive(Debug, Clone)]
+enum ReviewOp {
+    Decide {
+        grant: u128,
+        keep: bool,
+        reviewer: u128,
+        note: bool,
+    },
+    Complete {
+        by: u128,
+    },
+    Cancel {
+        by: u128,
+    },
+}
+
+fn review_op() -> impl Strategy<Value = ReviewOp> {
+    let who = prop::sample::select(vec![ALICE, BOB, CAROL, DAVE]);
+    prop_oneof![
+        6 => (1_u128..=5, any::<bool>(), who.clone(), any::<bool>())
+            .prop_map(|(grant, keep, reviewer, note)| ReviewOp::Decide { grant, keep, reviewer, note }),
+        2 => who.clone().prop_map(|by| ReviewOp::Complete { by }),
+        1 => who.prop_map(|by| ReviewOp::Cancel { by }),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// Every sequence of verdicts, completions and cancellations behaves like the reference:
+    /// only open reviews change, nobody reviews their own (or their group's) access, a
+    /// revocation needs a note, completion needs every verdict and returns the revocations,
+    /// and a refused step changes nothing.
+    #[test]
+    fn model_access_reviews_follow_the_reference(ops in prop::collection::vec(review_op(), 1..40)) {
+        let org = Org::new();
+        let mut review = review();
+        // The reference: state, and per reviewed grant its holder and verdict.
+        let mut open = true;
+        let mut verdicts: BTreeMap<u128, (PrincipalId, Option<bool>)> = review
+            .items()
+            .map(|i| (i.grant.as_u128(), (i.principal, None)))
+            .collect();
+        for (step, op) in ops.into_iter().enumerate() {
+            let at = t(NOW + 1 + i64::try_from(step).unwrap());
+            let before = review.clone();
+            match op {
+                ReviewOp::Decide { grant, keep, reviewer, note } => {
+                    let verdict = if keep { Verdict::Keep } else { Verdict::Revoke };
+                    let result = review.decide(gid(grant), verdict, p(reviewer), at, note.then(|| "left the team".to_owned()), &org);
+                    let expected = open
+                        && verdicts.get(&grant).is_some_and(|(holder, _)| {
+                            *holder != p(reviewer) && !org.members_of(*holder).contains(&p(reviewer))
+                        })
+                        && (keep || note);
+                    prop_assert_eq!(result.is_ok(), expected, "{:?}", result);
+                    if expected {
+                        if let Some(slot) = verdicts.get_mut(&grant) {
+                            slot.1 = Some(keep);
+                        }
+                    }
+                }
+                ReviewOp::Complete { by } => {
+                    let result = review.complete(p(by), at);
+                    let expected = open && verdicts.values().all(|(_, v)| v.is_some());
+                    prop_assert_eq!(result.is_ok(), expected);
+                    if let Ok(revoked) = result {
+                        let wanted: Vec<GrantId> = verdicts.iter().filter(|(_, (_, v))| *v == Some(false)).map(|(g, _)| gid(*g)).collect();
+                        prop_assert_eq!(revoked, wanted);
+                        prop_assert_eq!(review.state, ReviewState::Completed);
+                        open = false;
+                    }
+                }
+                ReviewOp::Cancel { by } => {
+                    let result = review.cancel(p(by), at);
+                    prop_assert_eq!(result.is_ok(), open);
+                    if result.is_ok() {
+                        prop_assert_eq!(review.state, ReviewState::Cancelled);
+                        open = false;
+                    }
+                }
+            }
+            if review == before {
+                continue;
+            }
+            // Something changed: it must have been allowed, and the progress must agree.
+            let decided = verdicts.values().filter(|(_, v)| v.is_some()).count();
+            prop_assert_eq!(review.progress(), (decided, verdicts.len()));
+        }
     }
 }

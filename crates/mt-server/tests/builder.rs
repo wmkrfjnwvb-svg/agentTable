@@ -1532,3 +1532,99 @@ async fn std_access_is_given_revoked_and_kept_apart() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn std_a_withdrawn_right_no_longer_decides_open_tasks() {
+    let app = empty();
+    let x = build(&app).await;
+    let p = people(&app).await;
+    call(
+        &app,
+        Method::PUT,
+        &format!("/api/tables/{}/process", x.claims),
+        Some(ALICE),
+        Some(design(&x, &p)),
+    )
+    .await;
+    grant(
+        &app,
+        json!({"to": p.max, "capability": "record.read", "on": {"kind": "base", "id": x.base}}),
+    )
+    .await;
+    grant(
+        &app,
+        json!({"to": p.finance, "capability": "record.read", "on": {"kind": "base", "id": x.base}}),
+    )
+    .await;
+    let (_, review) = grant(&app, json!({"to": p.finance, "capability": "expense.finance_review", "on": {"kind": "table", "id": x.claims}})).await;
+    // Alice's claim above the limit: Max, then finance.
+    call(
+        &app,
+        Method::PUT,
+        "/api/settings/expense.manager_limit",
+        Some(ALICE),
+        Some(json!({"type": "money", "text": "10 USD"})),
+    )
+    .await;
+    let purpose = columns_id(&app, &x.claims, "Purpose").await;
+    let (_, claim) = post(
+        &app,
+        &format!("/api/tables/{}/records", x.claims),
+        json!({"cells": {&purpose: {"text": "Dinner"}}}),
+    )
+    .await;
+    let claim_id = claim["id"].as_str().unwrap().to_owned();
+    let description = columns_id(&app, &x.lines, "Description").await;
+    post(&app, &format!("/api/tables/{}/records", x.lines), json!({"cells": {&description: {"text": "Dinner"}, &x.amount: {"text": "80"}, &x.claim_link: {"value": {"type": "link", "value": [claim_id]}}}})).await;
+    post(
+        &app,
+        &format!(
+            "/api/tables/{}/records/{claim_id}/transitions/submit",
+            x.claims
+        ),
+        json!({}),
+    )
+    .await;
+    call(
+        &app,
+        Method::POST,
+        &task(&app, &p.max, "Dinner").await,
+        Some(&p.max),
+        Some(json!({"act": "approve"})),
+    )
+    .await;
+    let fiona_task = task(&app, &p.fiona, "Dinner").await;
+    // The review right is revoked while Fiona's task is open.
+    let (status, _) = call(
+        &app,
+        Method::DELETE,
+        &format!("/api/access/grants/{}", review["id"].as_str().unwrap()),
+        Some(ALICE),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = call(
+        &app,
+        Method::POST,
+        &fiona_task,
+        Some(&p.fiona),
+        Some(json!({"act": "approve"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(body["message"]
+        .as_str()
+        .unwrap()
+        .contains("no longer may “expense.finance_review”"));
+    // Comments are still possible; the claim waits for an administrator.
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        &fiona_task,
+        Some(&p.fiona),
+        Some(json!({"act": "comment", "text": "I lost the right"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
