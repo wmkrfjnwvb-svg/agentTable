@@ -11,6 +11,7 @@
 pub mod access;
 pub mod api;
 pub mod builder;
+pub mod codelist;
 pub mod design;
 pub mod error;
 pub mod formula;

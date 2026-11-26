@@ -1028,6 +1028,7 @@ pub fn empty() -> ApiResult<Workspace> {
         links: Vec::new(),
         reviews: Vec::new(),
         shares: Vec::new(),
+        refset_history: Vec::new(),
     };
     let mut ws = Workspace::new(data)?;
     let perm = |e: mt_perm::PermError| ApiError::internal(e.to_string());

@@ -28,7 +28,7 @@ Command line
 Build your own
 --------------
 A new workspace is empty: you are Alice Admin, who may do everything. Build a base the way
-the end-to-end test does (screenshots build-01 … build-31 on the release page):
+the end-to-end test does (screenshots build-01 … build-32 on the release page):
 
   1. Home → "Start from scratch": create a base, e.g. "Expenses".
   2. Code lists: a list of expense categories (a tree: Travel › Flights, Hotels; Meals).
@@ -57,6 +57,9 @@ the end-to-end test does (screenshots build-01 … build-31 on the release page)
  12. "Share…" on a record makes a read-only link for people without an account: this record
      or the whole table, with fields left out and an expiry. It never shows more than its
      maker may see, never links to other tables, and stops working when withdrawn.
+ 13. Code lists keep every version ("show" a past version as it was). Tick "Changes need a
+     second person's approval": from then on a change is proposed and applies only when
+     someone else approves it — turning this off needs approval too.
 
 Or install the purchasing sample from the template gallery on the Home page (or start with
 --demo): suppliers, purchase requests with lines, cost centres, approvals routed by limits

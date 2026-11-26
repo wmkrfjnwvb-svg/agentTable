@@ -32,6 +32,7 @@ result in a realistic situation; **Low** = hardening; **Info** = right, but must
 | L2-08 | Medium | product: access | “Records they own” ignored the creator in tables without a person field, so an employee could not read the lines she had just entered | **Fixed**: the creator is an owner for the policy in every table |
 | L2-09 | Low | product: designer | Refusals named states by internal key (`on_hold`) | **Fixed**: by the names people typed |
 | L2-10 | Low | product: views | Explanations named “the Purchasing base” for every base; link titles containing commas showed as several records; a new record lost its “Saved.” confirmation | **Fixed** |
+| L2-12 | High | `mt-refdata::ledger` | Found while bringing the ledger into the product: the engine had no recorded way to change a list's policy, so it could only be changed outside the history — one person could have switched four eyes off and then changed the list unchecked | **Fixed** before use: the policy is a recorded change (`Change::SetPolicy`); under approval, switching it off is proposed and needs a second person. The ledger model test now checks that every version made while approval was required carries an approver |
 | L2-11 | Medium | `mt-lifecycle::calendar` | The module's own example said 8 working hours from Friday 16:00 end Monday 15:00; the code (correctly) says 16:00 | **Fixed** (documentation); the example is now a test |
 
 ## 2. Reasoning checks that passed
@@ -70,6 +71,12 @@ for every record (property). An agent acting for a person never exceeds either (
 currency's minor units; empty is never zero; limits compare money with money in the same currency
 (a limit in another currency does not apply rather than converting silently).
 
+**A share link never outlives its maker's rights.** A link is not a stored copy: each time it is
+opened it is evaluated as its maker's current access (row filter and field permissions), narrowed by
+the link itself (fields left out, no classified or protected fields, no links into other tables). A
+maker who loses `share.manage` breaks the link; a maker who loses sight of a field or record takes it
+out of the link (test `std_share_links_show_one_table_and_never_more_than_their_maker_sees`).
+
 **Configurations cannot be broken by editing them.** A field used by a formula, lifecycle, approval or
 access rule cannot be deleted (the users are named); a table others link to cannot be deleted; a
 design that removes a state still holding records is refused; removed select choices are disabled,
@@ -82,5 +89,5 @@ never deleted, so records keep their values. Every building step is in the audit
 | One lock per workspace today; per-base single writer with fencing (wave 1) and the operation pipeline | 3 | Concurrent transitions on one record from two nodes: exactly one applies |
 | Re-resolve capability-named approvers when grants change (today: the old approver is refused, an administrator reassigns) | 5 | Rule-driven reassignment on grant change |
 | SLA clocks on states; overdue approvals ticked by the scheduler | 5 | Timer fires once after a crash between cursor move and fire (L1-05) |
-| Settings scopes and code-list ledger in the product (R2-05, R2-06) | 3 | Base/person overrides resolve and explain; code-list changes need a second person when the set says so |
+| Settings scopes in the product (R2-05) | 3 | Base/person overrides resolve and explain |
 | Limits in another currency than the record | 6 (FX rates) | Convert with the rate of the record's date, or refuse with the reason |

@@ -124,7 +124,9 @@ pub fn impact(set: &EffectiveSet, change: &Change, usage: &dyn Usage) -> Impact 
         ids
     };
     let touched = match change {
-        Change::Add { .. } | Change::SetEnabled { enabled: true, .. } => Vec::new(),
+        Change::Add { .. }
+        | Change::SetEnabled { enabled: true, .. }
+        | Change::SetPolicy { .. } => Vec::new(),
         Change::SetEnabled { id, enabled: false } | Change::Move { id, .. } => with_branch(*id),
         Change::Update { id, patch } => {
             if patch.valid_from.is_some() || patch.valid_to.is_some() {

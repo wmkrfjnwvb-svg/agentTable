@@ -2603,3 +2603,281 @@ async fn edge_share_links_expire() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+async fn code_list(app: &Arc<App>, set: &str, who: &str, query: &str) -> Value {
+    call(
+        app,
+        Method::GET,
+        &format!("/api/refdata/{set}{query}"),
+        Some(who),
+        None,
+    )
+    .await
+    .1
+}
+
+fn item_names(list: &Value) -> Vec<String> {
+    list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn std_code_lists_keep_a_history_and_can_need_a_second_person() {
+    let dir = std::env::temp_dir().join(format!("agenttable-codelist-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("data.json");
+    let _ = std::fs::remove_file(&file);
+    let app = app_at(&file, now().millis());
+    let x = build(&app).await;
+    let p = people(&app).await;
+    let set = x.categories.clone();
+    let list = code_list(&app, &set, ALICE, "").await;
+    assert_eq!(list["history"]["version"], 4, "four items, four versions");
+    assert_eq!(list["history"]["approval"], false);
+    assert_eq!(list["canManage"], true);
+    assert_eq!(
+        list["history"]["versions"][0]["changes"][0],
+        "added “Meals” (MEALS)"
+    );
+    assert_eq!(
+        list["history"]["versions"][2]["changes"][0],
+        "added “Flights” (FLIGHT) under “Travel”"
+    );
+    assert_eq!(list["history"]["versions"][0]["by"], "Alice Admin");
+    assert!(list["history"]["versions"][0]["approvedBy"].is_null());
+    // Max may manage code lists too: he is the second person.
+    let (status, _) = grant(&app, json!({"to": p.max, "capability": "refdata.manage", "on": {"kind": "workspace"}, "reason": "Second pair of eyes"})).await;
+    assert_eq!(status, StatusCode::OK);
+    let path = format!("/api/refdata/{set}");
+    let (status, body) = call(
+        &app,
+        Method::PATCH,
+        &path,
+        Some(ALICE),
+        Some(json!({"approval": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({"applied": true, "version": 5}),
+        "switching four eyes on applies at once"
+    );
+    // From now on, changes are proposed.
+    let (status, body) = post(
+        &app,
+        &format!("{path}/items"),
+        json!({"code": "TAXI", "name": "Taxis", "parent": item_id(&list, "Travel")}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["applied"], false);
+    assert_eq!(body["proposal"], 1);
+    let list = code_list(&app, &set, ALICE, "").await;
+    assert!(
+        !item_names(&list).contains(&"Taxis".to_owned()),
+        "not before approval"
+    );
+    assert_eq!(list["history"]["proposals"][0]["status"], "pending");
+    assert_eq!(
+        list["history"]["proposals"][0]["changes"][0],
+        "added “Taxis” (TAXI) under “Travel”"
+    );
+    let decide = |who: &str, n: u64, body: Value| {
+        let app = app.clone();
+        let path = format!("{path}/proposals/{n}");
+        let who = who.to_owned();
+        async move { call(&app, Method::POST, &path, Some(&who), Some(body)).await }
+    };
+    let (status, body) = decide(ALICE, 1, json!({"decision": "approve"})).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "nobody approves their own change"
+    );
+    assert!(body["message"].as_str().unwrap().contains("someone else"));
+    let (status, body) = decide(&p.max, 1, json!({"decision": "approve"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["version"], 6);
+    let list = code_list(&app, &set, ALICE, "").await;
+    assert!(item_names(&list).contains(&"Taxis".to_owned()));
+    assert_eq!(list["history"]["versions"][0]["by"], "Alice Admin");
+    assert_eq!(list["history"]["versions"][0]["approvedBy"], "Max Manager");
+    assert_eq!(list["history"]["proposals"][0]["status"], "approved");
+    assert_eq!(list["history"]["proposals"][0]["decidedBy"], "Max Manager");
+    assert_eq!(
+        decide(&p.max, 1, json!({"decision": "approve"})).await.0,
+        StatusCode::CONFLICT,
+        "decided already"
+    );
+    assert_eq!(
+        decide(&p.max, 9, json!({"decision": "approve"})).await.0,
+        StatusCode::NOT_FOUND
+    );
+    // A rejection needs a reason; the item stays as it was.
+    let meals = item_id(&list, "Meals");
+    let (status, body) = call(
+        &app,
+        Method::PATCH,
+        &format!("{path}/items/{meals}"),
+        Some(ALICE),
+        Some(json!({"enabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["proposal"], 2);
+    assert_eq!(
+        decide(&p.max, 2, json!({"decision": "reject", "reason": " "}))
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        decide(
+            &p.max,
+            2,
+            json!({"decision": "reject", "reason": "Meals are still claimed"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let list = code_list(&app, &set, ALICE, "").await;
+    assert_eq!(
+        list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["name"] == "Meals")
+            .unwrap()["enabled"],
+        true
+    );
+    assert_eq!(
+        list["history"]["proposals"][0]["reason"],
+        "Meals are still claimed"
+    );
+    // Switching four eyes off needs four eyes; only its author withdraws a proposal.
+    let (status, body) = call(
+        &app,
+        Method::PATCH,
+        &path,
+        Some(ALICE),
+        Some(json!({"approval": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"applied": false, "proposal": 3}));
+    assert_eq!(
+        code_list(&app, &set, ALICE, "").await["history"]["proposals"][0]["changes"][0],
+        "changes apply at once again"
+    );
+    assert_eq!(
+        decide(&p.max, 3, json!({"decision": "withdraw"})).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        decide(ALICE, 3, json!({"decision": "withdraw"})).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            Method::PATCH,
+            &path,
+            Some(ALICE),
+            Some(json!({"approval": true}))
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "already so"
+    );
+    // Any version can be shown as it was.
+    assert!(item_names(&code_list(&app, &set, ALICE, "?asOf=0").await).is_empty());
+    let v4 = code_list(&app, &set, ALICE, "?asOf=4").await;
+    assert_eq!(item_names(&v4), ["Travel", "Flights", "Hotels", "Meals"]);
+    assert_eq!(v4["asOf"], 4);
+    assert_eq!(
+        item_names(&code_list(&app, &set, ALICE, "?asOf=6").await).len(),
+        5
+    );
+    assert_eq!(
+        call(
+            &app,
+            Method::GET,
+            &format!("{path}?asOf=99"),
+            Some(ALICE),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    // Without the right: read only.
+    assert_eq!(code_list(&app, &set, &p.mia, "").await["canManage"], false);
+    assert_eq!(
+        call(
+            &app,
+            Method::PATCH,
+            &path,
+            Some(&p.mia),
+            Some(json!({"approval": false}))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        decide(&p.mia, 3, json!({"decision": "approve"})).await.0,
+        StatusCode::FORBIDDEN
+    );
+    // The audit trail has every step.
+    let (_, audit) = call(&app, Method::GET, "/api/audit", Some(ALICE), None).await;
+    let text = audit.to_string();
+    for action in [
+        "refset.policy",
+        "refset.change.propose",
+        "refset.change.approve",
+        "refset.change.reject",
+        "refset.change.withdraw",
+    ] {
+        assert!(text.contains(action), "{action}");
+    }
+    // The history survives a restart, and a history that does not lead to the list is refused.
+    drop(app);
+    let again = app_at(&file, now().millis());
+    assert_eq!(
+        code_list(&again, &set, ALICE, "").await["history"]["version"],
+        6
+    );
+    drop(again);
+    let mut stored: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    stored["refset_history"][0]["revisions"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    std::fs::write(&file, stored.to_string()).unwrap();
+    let refused = mt_server::open(
+        Some(file.clone()),
+        Clock::Fixed(now()),
+        mt_server::Start::Empty,
+    );
+    assert!(refused.is_err(), "an inconsistent history is not loaded");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn item_id(list: &Value, name: &str) -> String {
+    list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["name"] == name)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}

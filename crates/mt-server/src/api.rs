@@ -192,7 +192,11 @@ pub fn routes() -> Router<Shared> {
         .route("/api/tables/{table}/formula", post(check_formula))
         .route("/api/field-types", get(field_types))
         .route("/api/refdata", get(refsets).post(create_refset))
-        .route("/api/refdata/{set}", get(refset))
+        .route("/api/refdata/{set}", get(refset).patch(update_refset))
+        .route(
+            "/api/refdata/{set}/proposals/{proposal}",
+            post(decide_proposal),
+        )
         .route("/api/capabilities", get(capabilities))
         .route("/api/explain", get(explain))
         .route("/api/audit", get(audit))
@@ -1621,7 +1625,7 @@ async fn add_item(
 ) -> Reply {
     let mut ws = app.ws.lock().await;
     let actor = actor(&ws, &headers)?;
-    let id = crate::builder::add_item(
+    let (id, outcome) = crate::builder::add_item(
         &mut ws,
         actor,
         parse(&set, "reference set")?,
@@ -1631,7 +1635,11 @@ async fn add_item(
         app.clock.now(),
     )?;
     app.save(&ws)?;
-    Ok(Json(json!({"id": id})))
+    let mut answer = outcome.json();
+    if let JsonValue::Object(map) = &mut answer {
+        map.insert("id".to_owned(), json!(id));
+    }
+    Ok(Json(answer))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1647,7 +1655,7 @@ async fn update_item(
 ) -> Reply {
     let mut ws = app.ws.lock().await;
     let actor = actor(&ws, &headers)?;
-    crate::builder::set_item_enabled(
+    let outcome = crate::builder::set_item_enabled(
         &mut ws,
         actor,
         parse(&set, "reference set")?,
@@ -1656,7 +1664,55 @@ async fn update_item(
         app.clock.now(),
     )?;
     app.save(&ws)?;
-    Ok(Json(json!({"updated": true})))
+    let mut answer = outcome.json();
+    if let JsonValue::Object(map) = &mut answer {
+        map.insert("updated".to_owned(), json!(true));
+    }
+    Ok(Json(answer))
+}
+
+#[derive(Debug, Deserialize)]
+struct RefSetPatch {
+    approval: bool,
+}
+
+async fn update_refset(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(set): Path<String>,
+    Json(body): Json<RefSetPatch>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let outcome = crate::codelist::set_policy(
+        &mut ws,
+        actor,
+        parse(&set, "reference set")?,
+        body.approval,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(outcome.json()))
+}
+
+async fn decide_proposal(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path((set, proposal)): Path<(String, u64)>,
+    Json(decision): Json<crate::codelist::Decision>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let version = crate::codelist::decide(
+        &mut ws,
+        actor,
+        parse(&set, "reference set")?,
+        proposal,
+        &decision,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"decided": true, "version": version})))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2143,10 +2199,14 @@ async fn refsets(State(app): State<Shared>) -> Json<JsonValue> {
 struct SetQuery {
     #[serde(default)]
     q: String,
+    /// Show the list as it was at this version.
+    #[serde(default, rename = "asOf")]
+    as_of: Option<u64>,
 }
 
 async fn refset(
     State(app): State<Shared>,
+    headers: HeaderMap,
     Path(set): Path<String>,
     Query(params): Query<SetQuery>,
 ) -> Reply {
@@ -2158,38 +2218,39 @@ async fn refset(
         .iter()
         .find(|s| s.set.id == id)
         .ok_or_else(|| ApiError::not_found("reference set"))?;
-    let set = ws
-        .refdata()
-        .get(id)
-        .ok_or_else(|| ApiError::not_found("reference set"))?;
-    let ids = if params.q.trim().is_empty() {
-        set.walk()
-    } else {
-        set.search(&params.q, "en", 200)
+    let now = app.clock.now();
+    let items = match params.as_of {
+        Some(version) => crate::codelist::items_as_of(&ws, id, version, &params.q, now)?,
+        None => {
+            let set = ws
+                .refdata()
+                .get(id)
+                .ok_or_else(|| ApiError::not_found("reference set"))?;
+            crate::codelist::items_json(set, &params.q, now)
+        }
     };
-    let today = app.clock.now().date();
-    let items: Vec<JsonValue> = ids
-        .iter()
-        .filter_map(|item| set.get(*item))
-        .map(|item| {
-            json!({
-                "id": item.id,
-                "code": item.code,
-                "name": item.name,
-                "depth": set.depth(item.id),
-                "path": set.path_label(item.id, "en", " › "),
-                "active": set.is_active(item.id, today),
-                "leaf": set.is_leaf(item.id),
-            })
-        })
-        .collect();
+    let manage = actor(&ws, &headers).is_ok_and(|actor| {
+        ws.decide(
+            actor,
+            &Action::RefDataManage.into(),
+            Resource::Tenant,
+            None,
+            &[],
+            now,
+        )
+        .allowed
+    });
     Ok(Json(json!({
         "id": state.set.id,
         "code": state.set.code,
         "name": state.set.name,
         "description": state.set.description,
         "tree": matches!(state.set.structure, mt_refdata::Structure::Tree { .. }),
+        "system": matches!(state.set.scope, mt_refdata::SetScope::System),
         "items": items,
+        "asOf": params.as_of,
+        "canManage": manage,
+        "history": crate::codelist::history_json(&ws, id)?,
     })))
 }
 

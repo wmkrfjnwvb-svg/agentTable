@@ -1,6 +1,6 @@
 import AccessBuilder from "./Access";
 import { useEffect, useState } from "react";
-import { api, ApiError, Explanation, Person, TableSummary } from "./api";
+import { api, ApiError, ChangeOutcome, CodeList, Explanation, Person, TableSummary } from "./api";
 import { ExplainList } from "./TablePage";
 
 export const PLACEHOLDERS = [
@@ -127,6 +127,67 @@ export function OverviewPage({ tables }: { tables: TableSummary[] }) {
   );
 }
 
+function stamp(at: number): string {
+  return new Date(at).toISOString().slice(0, 16).replace("T", " ");
+}
+
+/// Proposals waiting for a second person, the versions, and the decisions taken.
+function CodeListHistory({ set, reasons, setReasons, decide, show }: { set: CodeList; reasons: Record<number, string>; setReasons: (r: Record<number, string>) => void; decide: (n: number, d: "approve" | "reject" | "withdraw") => void; show: (v: number) => void }) {
+  const pending = set.history.proposals.filter((p) => p.status === "pending");
+  const closed = set.history.proposals.filter((p) => p.status === "rejected" || p.status === "withdrawn");
+  return (
+    <div className="codelist-history">
+      {pending.length > 0 && (
+        <div data-testid="proposals">
+          <h4>Waiting for approval</h4>
+          {pending.map((p) => (
+            <div key={p.id} className="proposal" data-testid={`proposal-${p.id}`}>
+              <div>
+                <b>#{p.id}</b> {p.changes.join("; ")} <span className="muted small">· proposed by {p.by}, {stamp(p.at)}</span>
+              </div>
+              {set.canManage && (
+                <div className="row wrap">
+                  <button className="small" onClick={() => decide(p.id, "approve")} data-testid={`approve-${p.id}`}>Approve</button>
+                  <input className="small-input" value={reasons[p.id] ?? ""} onChange={(e) => setReasons({ ...reasons, [p.id]: e.target.value })} placeholder="why reject" data-testid={`reject-reason-${p.id}`} />
+                  <button className="ghost small danger-text" onClick={() => decide(p.id, "reject")} data-testid={`reject-${p.id}`}>Reject</button>
+                  <button className="ghost small" onClick={() => decide(p.id, "withdraw")} data-testid={`withdraw-${p.id}`}>Withdraw (author)</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <h4>History</h4>
+      <ol className="versions" data-testid="versions">
+        {set.history.versions.map((v) => (
+          <li key={v.version} data-testid={`version-${v.version}`}>
+            <b>v{v.version}</b> {v.changes.join("; ")}{" "}
+            <span className="muted small">
+              · {v.by}
+              {v.approvedBy ? `, approved by ${v.approvedBy}` : ""} · {stamp(v.at)}
+            </span>{" "}
+            <button className="ghost small" onClick={() => show(v.version)} data-testid={`show-v${v.version}`}>show</button>
+          </li>
+        ))}
+        <li className="muted small">
+          v0 the list as it started <button className="ghost small" onClick={() => show(0)} data-testid="show-v0">show</button>
+        </li>
+      </ol>
+      {closed.length > 0 && (
+        <ul className="muted small" data-testid="closed-proposals">
+          {closed.map((p) => (
+            <li key={p.id}>
+              #{p.id} {p.changes.join("; ")} — {p.status}
+              {p.decidedBy ? ` by ${p.decidedBy}` : ""}
+              {p.reason ? `: “${p.reason}”` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function RefDataPage() {
   const [sets, setSets] = useState<Awaited<ReturnType<typeof api.refsets>>>([]);
   const [chosen, setChosen] = useState("");
@@ -139,31 +200,49 @@ export function RefDataPage() {
   const [itemName, setItemName] = useState("");
   const [itemParent, setItemParent] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [asOf, setAsOf] = useState<number | null>(null);
+  const [reasons, setReasons] = useState<Record<number, string>>({});
   const loadSets = (select?: string) =>
     api.refsets().then((list) => {
       setSets(list);
       if (select) setChosen(select);
       else if (!chosen && list[0]) setChosen(list[0].id);
     });
-  const loadSet = () => chosen && api.refset(chosen, query).then(setSet);
+  const loadSet = () => chosen && api.refset(chosen, query, asOf).then(setSet);
   useEffect(() => {
     loadSets();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
     if (!chosen) return;
-    const timer = window.setTimeout(() => api.refset(chosen, query).then(setSet), query ? 150 : 0);
+    const timer = window.setTimeout(() => api.refset(chosen, query, asOf).then(setSet), query ? 150 : 0);
     return () => window.clearTimeout(timer);
-  }, [chosen, query]);
+  }, [chosen, query, asOf]);
   const summary = sets.find((s) => s.id === chosen);
   const attempt = async (work: () => Promise<unknown>) => {
     setMessage(null);
+    setInfo(null);
     try {
       await work();
     } catch (e) {
       setMessage((e as { message: string }).message);
     }
   };
+  const outcome = (o: ChangeOutcome, done: string) =>
+    setInfo(o.applied ? done : `Proposed (#${o.proposal}): it applies when someone else approves it.`);
+  const decide = (proposal: number, decision: "approve" | "reject" | "withdraw") =>
+    attempt(async () => {
+      const r = await api.decideProposal(chosen, proposal, decision, reasons[proposal]);
+      setInfo(decision === "approve" ? `Approved: version ${r.version}.` : decision === "reject" ? "Rejected." : "Withdrawn.");
+      await loadSet();
+      await loadSets();
+    });
+  const setApproval = (approval: boolean) =>
+    attempt(async () => {
+      outcome(await api.setRefsetApproval(chosen, approval), approval ? "Changes now need a second person's approval." : "Changes apply at once again.");
+      await loadSet();
+    });
   const createSet = () =>
     attempt(async () => {
       const { id } = await api.createRefset(newCode, newName, newTree);
@@ -174,7 +253,7 @@ export function RefDataPage() {
     });
   const addItem = () =>
     attempt(async () => {
-      await api.addItem(chosen, itemCode, itemName, itemParent);
+      outcome(await api.addItem(chosen, itemCode, itemName, itemParent), "Added.");
       setItemCode("");
       setItemName("");
       await loadSet();
@@ -182,7 +261,7 @@ export function RefDataPage() {
     });
   const toggle = (item: string, enabled: boolean) =>
     attempt(async () => {
-      await api.setItemEnabled(chosen, item, enabled);
+      outcome(await api.setItemEnabled(chosen, item, enabled), enabled ? "Enabled." : "Disabled.");
       await loadSet();
     });
   return (
@@ -196,7 +275,7 @@ export function RefDataPage() {
       <div className="split">
         <div className="set-list">
           {sets.map((s) => (
-            <button key={s.id} className={`set ${chosen === s.id ? "chosen" : ""}`} onClick={() => { setChosen(s.id); setQuery(""); }} data-testid={`set-${s.code}`}>
+            <button key={s.id} className={`set ${chosen === s.id ? "chosen" : ""}`} onClick={() => { setChosen(s.id); setQuery(""); setAsOf(null); }} data-testid={`set-${s.code}`}>
               <div><b>{s.name}</b></div>
               <div className="muted small">{s.system ? "built in" : "this organisation"} · {s.tree ? "tree" : "list"} · {s.items} items</div>
             </button>
@@ -212,18 +291,33 @@ export function RefDataPage() {
         <div className="set-detail card">
           {set && (
             <>
-              <h3>{set.name}</h3>
+              <div className="row wrap">
+                <h3>{set.name}</h3>
+                <span className="badge engine" data-testid="refset-version">version {set.history.version}</span>
+                {set.history.approval && <span className="badge live">four eyes</span>}
+              </div>
               {set.description && <p className="muted">{set.description}</p>}
+              {!set.system && set.canManage && asOf === null && (
+                <label className="inline small">
+                  <input type="checkbox" checked={set.history.approval} onChange={(e) => setApproval(e.target.checked)} data-testid="four-eyes" />
+                  Changes need a second person's approval (turning this off needs approval too)
+                </label>
+              )}
+              {asOf !== null && (
+                <div className="notice soon" data-testid="as-of-banner">
+                  Showing version {asOf} as it was. <button className="ghost small" onClick={() => setAsOf(null)} data-testid="back-to-current">Back to the current version</button>
+                </div>
+              )}
               <input className="search" placeholder="Search items…" value={query} onChange={(e) => setQuery(e.target.value)} data-testid="refdata-search" />
               <table className="tree" data-testid="refdata-items">
-                <thead><tr><th>Item</th><th>Code</th><th>Path</th>{!summary?.system && <th />}</tr></thead>
+                <thead><tr><th>Item</th><th>Code</th><th>Path</th>{!summary?.system && asOf === null && <th />}</tr></thead>
                 <tbody>
                   {set.items.map((item) => (
                     <tr key={item.id} className={item.active ? "" : "inactive"}>
                       <td style={{ paddingLeft: `${0.5 + (query ? 0 : (item.depth - 1) * 1.25)}rem` }}>{set.tree && !item.leaf ? "▾ " : "• "}{item.name}{!item.active && <span className="muted small"> (disabled)</span>}</td>
                       <td><code>{item.code}</code></td>
                       <td className="muted small">{item.path}</td>
-                      {!summary?.system && (
+                      {!summary?.system && asOf === null && (
                         <td>
                           <button className="ghost small" onClick={() => toggle(item.id, !item.active)} data-testid={`toggle-${item.code}`}>{item.active ? "Disable" : "Enable"}</button>
                         </td>
@@ -233,7 +327,7 @@ export function RefDataPage() {
                   {set.items.length === 0 && <tr><td colSpan={4} className="muted">No items yet.</td></tr>}
                 </tbody>
               </table>
-              {!summary?.system && (
+              {!summary?.system && asOf === null && (
                 <div className="form-row">
                   <input value={itemName} onChange={(e) => setItemName(e.target.value)} placeholder="Item name" data-testid="item-name" />
                   <input value={itemCode} onChange={(e) => setItemCode(e.target.value)} placeholder="Code" data-testid="item-code" />
@@ -249,6 +343,8 @@ export function RefDataPage() {
             </>
           )}
           {message && <div className="notice refused" data-testid="refdata-message">{message}</div>}
+          {info && <div className="notice ok" data-testid="refdata-info">{info}</div>}
+          {set && <CodeListHistory set={set} reasons={reasons} setReasons={setReasons} decide={decide} show={setAsOf} />}
         </div>
       </div>
     </div>

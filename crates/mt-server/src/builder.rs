@@ -22,10 +22,6 @@ use std::collections::BTreeSet;
 /// Longest name of a base, table, field, code list or person.
 pub const MAX_NAME_CHARS: usize = 80;
 
-fn internal(error: impl core::fmt::Display) -> ApiError {
-    ApiError::internal(error.to_string())
-}
-
 fn name_of(text: &str, what: &str) -> ApiResult<String> {
     let name = text.trim();
     if name.is_empty() {
@@ -762,7 +758,7 @@ fn code_of(text: &str, what: &str) -> ApiResult<String> {
     }
 }
 
-fn refset_require(ws: &Workspace, actor: Actor, now: Timestamp) -> ApiResult<()> {
+pub(crate) fn refset_require(ws: &Workspace, actor: Actor, now: Timestamp) -> ApiResult<()> {
     tenant_require(ws, actor, Action::RefDataManage, now)
 }
 
@@ -823,37 +819,12 @@ fn change_refset(
     change: Change,
     what: &str,
     now: Timestamp,
-) -> ApiResult<()> {
-    refset_require(ws, actor, now)?;
-    let index = ws
-        .data
-        .refsets
-        .iter()
-        .position(|s| s.set.id == set)
-        .ok_or_else(|| ApiError::not_found(format!("code list {set}")))?;
-    let state = ws
-        .data
-        .refsets
-        .get(index)
-        .ok_or_else(|| internal("set vanished"))?;
-    let (next, _) = state
-        .apply(std::slice::from_ref(&change))
-        .map_err(|e| ApiError::invalid(e.to_string(), json!(null)))?;
-    let code = next.set.code.clone();
-    if let Some(slot) = ws.data.refsets.get_mut(index) {
-        *slot = next;
-    }
-    ws.rebuild_refdata()?;
-    ws.audit_object(
-        actor,
-        what,
-        ObjectRef::new("refset", set.to_string()),
-        json!({"set": code, "change": change}),
-        now,
-    )
+) -> ApiResult<crate::codelist::Outcome> {
+    crate::codelist::change(ws, actor, set, change, what, now)
 }
 
-/// Adds an item to a code list (under a parent, in a tree).
+/// Adds an item to a code list (under a parent, in a tree) — at once, or as a proposal
+/// when the list needs a second person's approval.
 ///
 /// # Errors
 /// 404, 403, 422 for a code in use, an unknown parent or a parent in a flat list.
@@ -865,7 +836,7 @@ pub fn add_item(
     name: &str,
     parent: Option<RefItemId>,
     now: Timestamp,
-) -> ApiResult<RefItemId> {
+) -> ApiResult<(RefItemId, crate::codelist::Outcome)> {
     let code = code_of(code, "item")?;
     let name = name_of(name, "item")?;
     let id = ws.new_id(now, RefItemId::new)?;
@@ -879,11 +850,12 @@ pub fn add_item(
             .map_or(0, |s| s.items.len()),
     )
     .unwrap_or(0);
-    change_refset(ws, actor, set, Change::Add { item }, "refset.item.add", now)?;
-    Ok(id)
+    let outcome = change_refset(ws, actor, set, Change::Add { item }, "refset.item.add", now)?;
+    Ok((id, outcome))
 }
 
-/// Enables or disables an item (disabled items stay on records, but cannot be chosen).
+/// Enables or disables an item (disabled items stay on records, but cannot be chosen) — at
+/// once, or as a proposal.
 ///
 /// # Errors
 /// 404, 403, 422.
@@ -894,7 +866,7 @@ pub fn set_item_enabled(
     item: RefItemId,
     enabled: bool,
     now: Timestamp,
-) -> ApiResult<()> {
+) -> ApiResult<crate::codelist::Outcome> {
     change_refset(
         ws,
         actor,

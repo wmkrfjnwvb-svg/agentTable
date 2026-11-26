@@ -18,7 +18,7 @@
 
 use crate::effective::EffectiveSet;
 use crate::error::RefDataError;
-use crate::model::{Overlay, RefItem, RefSet, Relabel, SetScope};
+use crate::model::{ChangePolicy, Overlay, RefItem, RefSet, Relabel, SetScope};
 use mt_core::id::{FieldId, RefItemId};
 use mt_core::time::Date;
 use mt_core::value::Value;
@@ -177,19 +177,27 @@ pub enum Change {
         /// The item.
         id: RefItemId,
     },
+    /// Change how the set itself is changed: at once, or only with a second person's
+    /// approval. Under [`ChangePolicy::Approval`] this change, too, needs approval — four
+    /// eyes cannot be switched off by one person.
+    SetPolicy {
+        /// The new policy.
+        policy: ChangePolicy,
+    },
 }
 
 impl Change {
-    /// The item the change is about.
+    /// The item the change is about; `None` for a change of the set itself.
     #[must_use]
-    pub const fn item(&self) -> RefItemId {
+    pub const fn item(&self) -> Option<RefItemId> {
         match self {
-            Change::Add { item } => item.id,
+            Change::Add { item } => Some(item.id),
             Change::Update { id, .. }
             | Change::Move { id, .. }
             | Change::SetEnabled { id, .. }
             | Change::SetAliases { id, .. }
-            | Change::Remove { id } => *id,
+            | Change::Remove { id } => Some(*id),
+            Change::SetPolicy { .. } => None,
         }
     }
 }
@@ -348,6 +356,13 @@ impl State {
                 } else {
                     self.items.retain(|item| item.id != *id);
                 }
+                Ok(())
+            }
+            Change::SetPolicy { policy } => {
+                if self.set.change_policy == *policy {
+                    return Err(RefDataError::EmptyChange);
+                }
+                self.set.change_policy = *policy;
                 Ok(())
             }
         }

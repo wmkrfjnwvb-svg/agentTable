@@ -314,3 +314,9 @@ a.button.secondary { background: var(--surface); color: var(--text); border-colo
 .shared .topbar { height: 56px; }
 .shared-main { max-width: 980px; margin: 1.5rem auto; padding: 0 1rem; }
 .shared-record { padding: 0.25rem 1rem; }
+
+/* Code-list history */
+.codelist-history { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
+.codelist-history h4 { margin: 0.6rem 0 0.3rem; }
+.proposal { border: 1px solid #ddd3fe; background: var(--soon-soft); border-radius: 8px; padding: 0.5rem 0.7rem; margin-bottom: 0.4rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.versions { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.88rem; }

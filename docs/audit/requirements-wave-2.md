@@ -67,7 +67,7 @@ lines (gate 98%).
 | Tenant overlay (extend, relabel, disable) | `Overlay`, `State::apply` | Met |
 | Crosswalk aliases per external system | `RefItem::aliases`, `crosswalk`, `alias` | Met |
 | Impact analysis | `impact` (removal blocked while used) | Met |
-| Versions and approvals (four eyes) | `Ledger` (`propose` / `approve` / `reject`, `as_of`, `restore`) | Engine; the product's code-list screen changes sets directly (R2-06) |
+| Versions and approvals (four eyes) | `Ledger` (`propose` / `approve` / `reject`, `as_of`, `restore`); `Change::SetPolicy` | Met: every code-list change in the product goes through the ledger; a list can need a second person; history and “as of” on screen (R2-06) |
 | Built-in ISO sets | `builtin` (countries, currencies, languages, sex, fiscal periods) | Met |
 | Acceptance: only enabled items valid on the effective date | `RefData::resolver(day, …)` drives `mt-core` validation | Met |
 | Settings: typed, scoped (system → tenant → base → user), secrets, flags, `PARAM()` | `params::Registry` with `resolve` / `explain`; `PARAM` in `mt-formula` | Engine; the product's Settings page keeps tenant-level values only (R2-05) |
@@ -133,7 +133,7 @@ lines (gate 98%).
 | R2-03 | Medium | The product's process code assumed the demo (table, field names, guard text) | Fixed: the designer generates every definition; descriptions come from the definitions |
 | R2-04 | Medium | “Records they own” ignored the creator in tables without a person field | Fixed (see L2-08) |
 | R2-05 | — | Settings in the product are tenant-wide values only; the engine's scopes, history and explain are not used yet | **Deferred to wave 3** with storage (settings per base and person need it) |
-| R2-06 | — | Code-list changes in the product bypass the versioned ledger (no history, no four eyes) | **Deferred to wave 3** (the ledger is stored with the store) |
+| R2-06 | — | Code-list changes in the product bypass the versioned ledger (no history, no four eyes) | **Fixed**: changes are committed or proposed through `Ledger`; the history is stored next to the list and must replay to it on load; switching four eyes off needs approval (`Change::SetPolicy`, model-tested). Tests `std_four_eyes_is_switched_on_at_once_and_off_only_with_a_second_person`, `std_code_lists_keep_a_history_and_can_need_a_second_person`; browser step build-32 |
 | R2-07 | — | SLA clocks and calendars are not attached to lifecycle states yet | **Deferred to wave 5** (timers need the job queue with leases, wave 3) |
 | R2-08 | — | The designer does not offer quorum, parallel blocks, fill-in steps or timeouts, which the engine has | **Fixed**: all four in the designer; test `std_quorum_parallel_fill_in_and_timeouts`; browser steps build-21 … build-25 |
 | R2-09 | — | The Access page does not offer field access, validity, share links or reviews, which the engine has | **Fixed**: grants on a table take “only” / “all but” fields and a period; reviews (open on a place, keep / revoke with a note, complete revokes, cancel) and read-only share links (a record or a table, fields left out, expiry, withdrawal, an anonymous page). Tests `std_grants_limited_to_fields_and_to_a_period`, `std_access_reviews_keep_or_revoke_with_a_note`, `std_share_links_show_one_table_and_never_more_than_their_maker_sees`, `edge_share_links_expire`; browser steps build-29 … build-31 |

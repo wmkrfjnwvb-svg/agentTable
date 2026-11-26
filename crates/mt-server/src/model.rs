@@ -245,6 +245,9 @@ pub struct Data {
     /// Share links, active and withdrawn.
     #[serde(default)]
     pub shares: Vec<crate::access::Share>,
+    /// The history of each code list that changed since histories were kept.
+    #[serde(default)]
+    pub refset_history: Vec<crate::codelist::History>,
 }
 
 /// A cell as a client sends it: text to read as the field's type, or a structured value
@@ -302,6 +305,7 @@ impl Workspace {
         };
         workspace.ensure_bases();
         workspace.rebuild_refdata()?;
+        crate::codelist::verify(&workspace)?;
         workspace.rebuild_graph()?;
         Ok(workspace)
     }

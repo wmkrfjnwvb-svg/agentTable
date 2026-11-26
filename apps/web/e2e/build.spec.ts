@@ -601,6 +601,50 @@ test.describe.serial("build your own: expense claims from scratch", () => {
     await outsider.close();
   });
 
+  test("a code list needs a second person for its changes, and keeps every version", async () => {
+    // Max becomes the second person who may manage code lists.
+    await page.getByTestId("nav-access").click();
+    await page.getByTestId("grant-to").selectOption({ label: "Max Manager" });
+    await page.getByTestId("grant-kind").selectOption("capability");
+    await page.getByTestId("grant-capability").fill("refdata.manage");
+    await page.getByTestId("grant-place").selectOption({ label: "the whole workspace" });
+    await page.getByTestId("grant-reason").fill("Second pair of eyes for code lists");
+    await page.getByTestId("give-grant").click();
+    await expect(page.getByTestId("access-message")).toHaveText("Given.");
+    await page.getByTestId("nav-refdata").click();
+    await page.getByTestId("set-expense_category").click();
+    await expect(page.getByTestId("refset-version")).toHaveText("version 4");
+    await page.getByTestId("four-eyes").click();
+    await expect(page.getByTestId("refdata-info")).toHaveText("Changes now need a second person's approval.");
+    await expect(page.getByTestId("refset-version")).toHaveText("version 5");
+    await page.getByTestId("item-name").fill("Taxis");
+    await page.getByTestId("item-code").fill("TAXI");
+    await page.getByTestId("item-parent").selectOption({ label: "Travel" });
+    await page.getByTestId("add-item").click();
+    await expect(page.getByTestId("refdata-info")).toContainText("Proposed (#1)");
+    await expect(page.getByTestId("refdata-items")).not.toContainText("Taxis");
+    await expect(page.getByTestId("proposal-1")).toContainText("added “Taxis” (TAXI) under “Travel”");
+    await page.getByTestId("approve-1").click();
+    await expect(page.getByTestId("refdata-message")).toContainText("someone else must approve or reject it");
+    // Max approves.
+    await page.getByTestId("user-select").selectOption({ label: "Max Manager — Head of sales — approves" });
+    await page.getByTestId("nav-refdata").click();
+    await page.getByTestId("set-expense_category").click();
+    await page.getByTestId("approve-1").click();
+    await expect(page.getByTestId("refdata-info")).toHaveText("Approved: version 6.");
+    await expect(page.getByTestId("refdata-items")).toContainText("Travel › Taxis");
+    await expect(page.getByTestId("version-6")).toContainText("Alice Admin, approved by Max Manager");
+    await shot(page, "32-code-list-history");
+    // Any version can be looked at as it was.
+    await page.getByTestId("show-v4").click();
+    await expect(page.getByTestId("as-of-banner")).toContainText("Showing version 4");
+    await expect(page.getByTestId("refdata-items")).not.toContainText("Taxis");
+    await expect(page.getByTestId("refdata-items")).toContainText("Meals");
+    await page.getByTestId("back-to-current").click();
+    await expect(page.getByTestId("refdata-items")).toContainText("Taxis");
+    await page.getByTestId("user-select").selectOption({ label: "Alice Admin — Workspace administrator" });
+  });
+
   test("a template installs next to what was built", async () => {
     await page.getByTestId("nav-home").click();
     await page.getByTestId("install-purchasing").click();
@@ -613,7 +657,7 @@ test.describe.serial("build your own: expense claims from scratch", () => {
 
   test("everything built is in the audit chain", async () => {
     await page.getByTestId("nav-audit").click();
-    for (const action of ["base.create", "refset.create", "table.create", "field.create", "setting.update", "member.create", "process.publish", "access.grant", "approval.approve", "access.review.complete", "share.create", "share.revoke", "template.install"]) {
+    for (const action of ["base.create", "refset.create", "table.create", "field.create", "setting.update", "member.create", "process.publish", "access.grant", "approval.approve", "access.review.complete", "share.create", "share.revoke", "refset.change.approve", "template.install"]) {
       await expect(page.getByTestId("audit-entries")).toContainText(action);
     }
     await page.getByTestId("verify").click();

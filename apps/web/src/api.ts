@@ -202,6 +202,24 @@ export type Option = { value: Value | string; label: string; color?: string; pat
 
 export type ApiError = { status: number; code: string; message: string; details?: unknown };
 
+export type ChangeOutcome = { applied: boolean; version?: number; proposal?: number };
+export type CodeList = {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  tree: boolean;
+  system: boolean;
+  items: { id: string; code: string; name: string; depth: number; path: string; active: boolean; leaf: boolean; enabled: boolean }[];
+  asOf: number | null;
+  canManage: boolean;
+  history: {
+    version: number;
+    approval: boolean;
+    versions: { version: number; at: number; by: string; approvedBy: string | null; changes: string[] }[];
+    proposals: { id: number; by: string; byId: string; at: number; changes: string[]; note: string | null; status: "pending" | "approved" | "rejected" | "withdrawn"; decidedBy: string | null; reason: string | null; version: number | null }[];
+  };
+};
 export type GrantRow = {
   id: string;
   to: string;
@@ -300,11 +318,11 @@ export const api = {
     ),
   addField: (table: string, spec: unknown) => call<{ field: string; table: TableInfo }>("POST", `/api/tables/${table}/fields`, spec),
   refsets: () => call<{ id: string; code: string; name: string; description: string | null; tree: boolean; system: boolean; items: number }[]>("GET", "/api/refdata"),
-  refset: (id: string, q = "") =>
-    call<{ id: string; name: string; description: string | null; tree: boolean; items: { id: string; code: string; name: string; depth: number; path: string; active: boolean; leaf: boolean }[] }>(
-      "GET",
-      `/api/refdata/${id}?q=${encodeURIComponent(q)}`,
-    ),
+  refset: (id: string, q = "", asOf: number | null = null) =>
+    call<CodeList>("GET", `/api/refdata/${id}?q=${encodeURIComponent(q)}${asOf === null ? "" : `&asOf=${asOf}`}`),
+  setRefsetApproval: (set: string, approval: boolean) => call<ChangeOutcome>("PATCH", `/api/refdata/${set}`, { approval }),
+  decideProposal: (set: string, proposal: number, decision: "approve" | "reject" | "withdraw", reason?: string) =>
+    call<{ decided: boolean; version: number | null }>("POST", `/api/refdata/${set}/proposals/${proposal}`, { decision, reason }),
   capabilities: () => call<{ capabilities: string[]; rules: { name: string; first: string; second: string; kind: string }[] }>("GET", "/api/capabilities"),
   explain: (params: { table: string; record?: string; capability: string; as: string; for?: string }) => {
     const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][]);
@@ -324,8 +342,8 @@ export const api = {
   updateField: (table: string, field: string, patch: FieldPatch) => call<TableInfo>("PATCH", `/api/tables/${table}/fields/${field}`, patch),
   deleteField: (table: string, field: string) => call<TableInfo>("DELETE", `/api/tables/${table}/fields/${field}`),
   createRefset: (code: string, name: string, tree: boolean) => call<{ id: string }>("POST", "/api/refdata", { code, name, tree }),
-  addItem: (set: string, code: string, name: string, parent?: string) => call<{ id: string }>("POST", `/api/refdata/${set}/items`, { code, name, parent: parent || undefined }),
-  setItemEnabled: (set: string, item: string, enabled: boolean) => call<{ updated: boolean }>("PATCH", `/api/refdata/${set}/items/${item}`, { enabled }),
+  addItem: (set: string, code: string, name: string, parent?: string) => call<ChangeOutcome & { id: string }>("POST", `/api/refdata/${set}/items`, { code, name, parent: parent || undefined }),
+  setItemEnabled: (set: string, item: string, enabled: boolean) => call<ChangeOutcome>("PATCH", `/api/refdata/${set}/items/${item}`, { enabled }),
   createPerson: (name: string, kind: string, title: string, members: string[] = []) => call<{ id: string }>("POST", "/api/people", { name, kind, title, members }),
   updatePerson: (id: string, patch: { name?: string; title?: string; members?: string[] }) => call<{ updated: boolean }>("PATCH", `/api/people/${id}`, patch),
   settings: () => call<Setting[]>("GET", "/api/settings"),

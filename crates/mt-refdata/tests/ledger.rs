@@ -224,16 +224,23 @@ fn std_every_kind_of_change_on_a_tenant_set() {
         .revisions()
         .iter()
         .all(|r| r.by == alice && r.approved_by.is_none()));
-    assert_eq!(Change::Remove { id: rid(113) }.item(), rid(113));
-    assert_eq!(add(5, "x", "X", None).item(), rid(5));
-    assert_eq!(rename(6, "X").item(), rid(6));
+    assert_eq!(Change::Remove { id: rid(113) }.item(), Some(rid(113)));
+    assert_eq!(add(5, "x", "X", None).item(), Some(rid(5)));
+    assert_eq!(rename(6, "X").item(), Some(rid(6)));
+    assert_eq!(
+        Change::SetPolicy {
+            policy: ChangePolicy::Approval
+        }
+        .item(),
+        None
+    );
     assert_eq!(
         Change::Move {
             id: rid(7),
             parent: None
         }
         .item(),
-        rid(7)
+        Some(rid(7))
     );
     assert_eq!(
         Change::SetEnabled {
@@ -241,9 +248,9 @@ fn std_every_kind_of_change_on_a_tenant_set() {
             enabled: true
         }
         .item(),
-        rid(8)
+        Some(rid(8))
     );
-    assert_eq!(alias(&["X"]).item(), rid(113));
+    assert_eq!(alias(&["X"]).item(), Some(rid(113)));
     // A state refuses an empty change list on its own, too.
     assert_eq!(
         region_state().apply(&[]).unwrap_err(),
@@ -1185,6 +1192,7 @@ fn arb_change() -> impl Strategy<Value = Change> {
         2 => (any_id.clone(), any::<bool>()).prop_map(|(id, enabled)| Change::SetEnabled { id: rid(id), enabled }),
         2 => (any_id.clone(), proptest::collection::btree_set("[A-C]", 0..2)).prop_map(|(id, values)| Change::SetAliases { id: rid(id), system: "sap".into(), values }),
         1 => any_id.prop_map(|id| Change::Remove { id: rid(id) }),
+        1 => any::<bool>().prop_map(|approval| Change::SetPolicy { policy: if approval { ChangePolicy::Approval } else { ChangePolicy::Direct } }),
     ]
 }
 
@@ -1239,8 +1247,12 @@ proptest! {
             if ledger.version() > before.version() {
                 snapshots.push(ledger.state().clone());
             }
-            if approval {
-                prop_assert!(ledger.revisions().iter().all(|r| r.approved_by.is_some()), "a change bypassed approval");
+        }
+        // While a set needs approval, nothing changes without it — not even the policy.
+        for (index, revision) in ledger.revisions().iter().enumerate() {
+            let policy = ledger.as_of(u64::try_from(index).unwrap()).unwrap().set.change_policy;
+            if policy == ChangePolicy::Approval {
+                prop_assert!(revision.approved_by.is_some(), "a change bypassed approval");
             }
         }
         // The state is a valid set and matches its own effective set.
@@ -1268,4 +1280,59 @@ proptest! {
             }
         }
     }
+}
+
+#[test]
+fn std_four_eyes_is_switched_on_at_once_and_off_only_with_a_second_person() {
+    let alice = person(1);
+    let bob = person(2);
+    let mut ledger = Ledger::new(region_state()).unwrap();
+    let to = |policy| Change::SetPolicy { policy };
+    // Switching four eyes on is a change like any other.
+    assert_eq!(
+        ledger.commit(alice, at(1), 0, vec![to(ChangePolicy::Approval)]),
+        Ok(1)
+    );
+    assert_eq!(ledger.state().set.change_policy, ChangePolicy::Approval);
+    // From now on, nothing applies at once — switching it off neither.
+    assert_eq!(
+        ledger.commit(alice, at(2), 1, vec![to(ChangePolicy::Direct)]),
+        Err(RefDataError::ApprovalRequired)
+    );
+    assert_eq!(
+        ledger.commit(alice, at(2), 1, vec![rename(111, "Paris")]),
+        Err(RefDataError::ApprovalRequired)
+    );
+    // The same policy again is no change.
+    assert_eq!(
+        ledger.propose(alice, at(3), vec![to(ChangePolicy::Approval)], None),
+        Err(RefDataError::EmptyChange)
+    );
+    let id = ledger
+        .propose(
+            alice,
+            at(3),
+            vec![to(ChangePolicy::Direct)],
+            Some("Year-end freeze over".into()),
+        )
+        .unwrap();
+    assert_eq!(
+        ledger.approve(id, alice, at(4)),
+        Err(RefDataError::SelfApproval)
+    );
+    assert_eq!(ledger.approve(id, bob, at(4)), Ok(2));
+    assert_eq!(ledger.state().set.change_policy, ChangePolicy::Direct);
+    assert_eq!(ledger.revisions()[1].approved_by, Some(bob));
+    // History reads back, policy included.
+    assert_eq!(
+        ledger.as_of(1).unwrap().set.change_policy,
+        ChangePolicy::Approval
+    );
+    assert_eq!(
+        ledger.as_of(0).unwrap().set.change_policy,
+        ChangePolicy::Direct
+    );
+    // A policy change touches no record.
+    let impact = impact::impact(ledger.effective(), &to(ChangePolicy::Approval), &NoUsage);
+    assert!(impact.is_harmless());
 }
