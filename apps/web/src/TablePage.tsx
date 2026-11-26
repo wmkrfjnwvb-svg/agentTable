@@ -153,6 +153,11 @@ export default function TablePage({ tableId, onChanged }: { tableId: string; onC
         </div>
         <div className="actions">
           {table.canManageSchema && (
+            <a className="button secondary" href={`#/table/${tableId}/process`} data-testid="design-process">
+              Process
+            </a>
+          )}
+          {table.canManageSchema && (
             <button className="secondary" onClick={() => setPicking(true)} data-testid="add-field">
               + Field
             </button>

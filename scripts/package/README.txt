@@ -28,7 +28,7 @@ Command line
 Build your own
 --------------
 A new workspace is empty: you are Alice Admin, who may do everything. Build a base the way
-the end-to-end test does (screenshots build-01 … build-13 on the release page):
+the end-to-end test does (screenshots build-01 … build-22 on the release page):
 
   1. Home → "Start from scratch": create a base, e.g. "Expenses".
   2. Code lists: a list of expense categories (a tree: Travel › Flights, Hotels; Meals).
@@ -41,6 +41,15 @@ the end-to-end test does (screenshots build-01 … build-13 on the release page)
   6. People & groups: add the people who will use it.
   7. Enter a claim and its lines; watch the total and the formula follow. Click a column
      header to rename a field, make it required, edit its choices or delete it.
+  8. "Process" on the claims table: states (Draft, Submitted waiting for approval and locked,
+     Approved, Paid, Rejected), buttons (Submit, Pay — only for whoever may "expense.pay" —,
+     Revise, Withdraw) and the approval: Max approves, finance reviews only when "Needs
+     finance" is Yes, finance is told it can pay. Publish (the designer refuses designs that
+     could strand a record).
+  9. Access: a set "Employee" (read, create, update) for Mia on her own records; read for Max;
+     read, review and pay (up to 10,000 USD) for the finance team.
+ 10. Sign in as Mia, enter and submit a claim; as Max approve it in Approvals; as Fiona review
+     and pay it; as Mia read the inbox.
 
 Or install the purchasing sample from the template gallery on the Home page (or start with
 --demo): suppliers, purchase requests with lines, cost centres, approvals routed by limits
@@ -55,8 +64,8 @@ to become another person:
   Gina Guest         a supplier contact: sees only her own company
   Purchasing assistant (AI agent) — acting for someone, sees exactly what they see
 
-Not built yet (shown as placeholders): designing lifecycles, approvals and access rules on
-screen (next), automations, email/chat notifications, dashboards, the AI assistant. Storage is
+Not built yet (shown as placeholders): automations, email/chat notifications, dashboards,
+the AI assistant. Storage is
 one JSON file until the database layer arrives; sign-in is a demo switcher until real
 identity arrives.
 

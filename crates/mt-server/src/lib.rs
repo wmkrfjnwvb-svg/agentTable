@@ -8,8 +8,10 @@
 //! as placeholders in the web app.
 #![forbid(unsafe_code)]
 
+pub mod access;
 pub mod api;
 pub mod builder;
+pub mod design;
 pub mod error;
 pub mod formula;
 pub mod model;

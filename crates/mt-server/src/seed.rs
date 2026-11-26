@@ -866,34 +866,38 @@ fn formulas(ws: &mut Workspace) -> ApiResult<()> {
     ws.rebuild_graph()
 }
 
-/// The request lifecycle and the purchase approval.
-fn process(ws: &mut Workspace) -> ApiResult<()> {
+/// The request lifecycle and the purchase approval, published through the designer like any
+/// process a person draws.
+fn process(ws: &mut Workspace, now: Timestamp) -> ApiResult<()> {
+    use crate::design::{
+        ApprovalDesign, ProcessDesign, SimpleCondition, StateDesign, StepDesign, TransitionDesign,
+    };
     use mt_core::state::StateCategory;
-    use mt_lifecycle::approval::{ApprovalDef, Approver, Case, Mode, Node};
-    use mt_lifecycle::lifecycle::{Lifecycle, StateDef, Transition};
-    let state = |key: &str, name: &str, category: StateCategory| StateDef {
+    use mt_lifecycle::approval::{Approver, Mode};
+    let state = |key: &str, name: &str, category: StateCategory| StateDesign {
         key: key.to_owned(),
         name: name.to_owned(),
         category,
         required: Vec::new(),
-        editable: None,
+        locked: false,
+        editable: Vec::new(),
     };
-    let go =
-        |key: &str, name: &str, from: &[&str], to: &str, capability: Option<&str>| Transition {
+    let go = |key: &str, name: &str, from: &[&str], to: &str, capability: Option<&str>| {
+        TransitionDesign {
             key: key.to_owned(),
             name: name.to_owned(),
             from: from.iter().map(|s| (*s).to_owned()).collect(),
             to: to.to_owned(),
             capability: capability.map(str::to_owned),
-            guard: None,
-            approval: None,
-        };
-    let system = Some(crate::process::SYSTEM);
+            when: None,
+        }
+    };
     let mut submitted = state("submitted", "Submitted", StateCategory::PendingApproval);
     submitted.required = vec![request::TITLE, request::SUPPLIER, request::LINES];
-    submitted.editable = Some(Vec::new());
+    submitted.locked = true;
     let mut approved = state("approved", "Approved", StateCategory::InProgress);
-    approved.editable = Some(vec![request::NEEDED_BY]);
+    approved.locked = true;
+    approved.editable = vec![request::NEEDED_BY];
     let mut submit = go(
         "submit",
         "Submit for approval",
@@ -901,11 +905,12 @@ fn process(ws: &mut Workspace) -> ApiResult<()> {
         "submitted",
         None,
     );
-    submit.guard = Some(Condition::compare(request::TOTAL, Operator::Gt, money(0)?));
-    submit.approval = Some("purchase_approval".to_owned());
-    let lifecycle = Lifecycle {
-        id: mt_core::id::LifecycleId::from_u128(1),
-        table: REQUESTS,
+    submit.when = Some(SimpleCondition {
+        field: request::TOTAL,
+        op: Operator::Gt,
+        text: "0 USD".to_owned(),
+    });
+    let design = ProcessDesign {
         name: "Purchase request".to_owned(),
         states: vec![
             state("draft", "Draft", StateCategory::New),
@@ -919,9 +924,6 @@ fn process(ws: &mut Workspace) -> ApiResult<()> {
         transitions: vec![
             submit,
             go("withdraw", "Withdraw", &["submitted"], "draft", None),
-            go("approve", "Approve", &["submitted"], "approved", system),
-            go("reject", "Reject", &["submitted"], "rejected", system),
-            go("send_back", "Send back", &["submitted"], "draft", system),
             go(
                 "order",
                 "Place the order",
@@ -932,83 +934,44 @@ fn process(ws: &mut Workspace) -> ApiResult<()> {
             go("revise", "Revise", &["rejected"], "draft", None),
             go("cancel", "Cancel", &[], "cancelled", None),
         ],
-    };
-    let approval = ApprovalDef {
-        key: "purchase_approval".to_owned(),
-        name: "Purchase approval".to_owned(),
-        version: 1,
-        steps: vec![
-            Node::Approval {
-                key: "within_limits".to_owned(),
-                name: "Approver within limits".to_owned(),
-                approvers: vec![Approver::Capability {
-                    capability: "request.approve".to_owned(),
-                }],
-                mode: Mode::Any,
-                allow_return: true,
-                timeout: None,
-                escalate_to: None,
-            },
-            Node::Branch {
-                key: "cfo_limit".to_owned(),
-                name: "Above the CFO limit?".to_owned(),
-                cases: vec![Case {
-                    name: "Needs CFO".to_owned(),
-                    when: Condition::compare(request::NEEDS_CFO, Operator::Eq, Value::Bool(true)),
-                    then: vec![Node::Approval {
-                        key: "cfo".to_owned(),
-                        name: "CFO".to_owned(),
-                        approvers: vec![Approver::Person { id: ERIN }],
-                        mode: Mode::Any,
-                        allow_return: true,
-                        timeout: None,
-                        escalate_to: None,
+        approval: Some(ApprovalDesign {
+            name: "Purchase approval".to_owned(),
+            started_by: "submit".to_owned(),
+            approved: "approved".to_owned(),
+            rejected: "rejected".to_owned(),
+            returned: "draft".to_owned(),
+            steps: vec![
+                StepDesign::Approval {
+                    name: "Approver within limits".to_owned(),
+                    approvers: vec![Approver::Capability {
+                        capability: "request.approve".to_owned(),
                     }],
-                }],
-                otherwise: Vec::new(),
-            },
-            Node::Notify {
-                key: "ready_to_order".to_owned(),
-                name: "Approved — ready to order".to_owned(),
-                to: vec![Approver::Capability {
-                    capability: "order.place".to_owned(),
-                }],
-            },
-        ],
+                    mode: Mode::Any,
+                    can_send_back: true,
+                    when: None,
+                },
+                StepDesign::Approval {
+                    name: "CFO".to_owned(),
+                    approvers: vec![Approver::Person { id: ERIN }],
+                    mode: Mode::Any,
+                    can_send_back: true,
+                    when: Some(SimpleCondition {
+                        field: request::NEEDS_CFO,
+                        op: Operator::Eq,
+                        text: "yes".to_owned(),
+                    }),
+                },
+                StepDesign::Notify {
+                    name: "Approved — ready to order".to_owned(),
+                    to: vec![Approver::Capability {
+                        capability: "order.place".to_owned(),
+                    }],
+                    when: None,
+                },
+            ],
+        }),
     };
-    let table = ws.table(REQUESTS)?;
-    let type_of = |field: FieldId| table.field(field).map(|f| f.data_type);
-    let bad = |e: mt_lifecycle::LifecycleError| ApiError::internal(e.to_string());
-    lifecycle.check().map_err(bad)?;
-    lifecycle.check_in_table(&type_of).map_err(bad)?;
-    approval.check().map_err(bad)?;
-    approval.check_in_table(&type_of).map_err(bad)?;
-    let option = |state: &str, option: RefItemId| crate::process::StateOption {
-        state: state.to_owned(),
-        option,
-    };
-    ws.data.process.bindings.push(crate::process::Binding {
-        lifecycle,
-        field: request::STATUS,
-        options: vec![
-            option("draft", status::DRAFT),
-            option("submitted", status::SUBMITTED),
-            option("approved", status::APPROVED),
-            option("ordered", status::ORDERED),
-            option("rejected", status::REJECTED),
-            option("cancelled", status::CANCELLED),
-        ],
-        children: vec![crate::process::Child {
-            table: LINES,
-            link: line::REQUEST,
-            parent_field: request::LINES,
-        }],
-        on_approved: "approve".to_owned(),
-        on_rejected: "reject".to_owned(),
-        on_returned: "send_back".to_owned(),
-    });
-    ws.data.process.definitions.push(approval);
-    Ok(())
+    crate::design::publish(ws, Actor::direct(ALICE), REQUESTS, design, now)
 }
 
 /// The open task of a person on a record's approval, approved.
@@ -1160,7 +1123,7 @@ pub fn install_purchasing(ws: &mut Workspace, actor: Actor, now: Timestamp) -> A
     ws.rebuild_graph()?;
     formulas(ws)?;
     policy(ws, now)?;
-    process(ws)?;
+    process(ws, now)?;
     records(ws, now)?;
     Ok(())
 }

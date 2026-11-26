@@ -17,6 +17,7 @@ stand-in is replaced and the same binary, web app and end-to-end tests grow with
 | Storage | one JSON file, written atomically after each change | `mt-store`: SQLite/MySQL/PostgreSQL (wave 3) |
 | Identity | a user switcher (`x-user`, `x-on-behalf-of` headers) | `mt-identity` (wave 4) |
 | API | `/api/*`, JSON | versioned Public/Admin APIs with OpenAPI: `mt-api` (wave 4) |
+| Building it yourself | bases, tables, the field picker, code lists, settings, people and groups (`builder`); the process designer (`design`); the access builder (`access`) | views saved per person, forms, templates of your own: waves 6–7 |
 | Automations, email/chat notifications, dashboards, AI | placeholders in the web app | waves 5, 6 |
 
 ## Run
@@ -38,6 +39,8 @@ and the template gallery. Debug builds read `apps/web/dist` from disk.
 | `model` | The workspace: tables, records, reference sets, people, policy, audit; create/update/delete and add-field operations, each checked, validated, recomputed and audited |
 | `seed` | The demo: suppliers, purchase requests, request lines; seven people with different access; the request lifecycle and purchase approval; records created, submitted and approved through the real operations |
 | `builder` | Building a configuration: bases, tables, field editing and deletion (refused while formulas, lifecycles, approvals or access rules use the field), two-way links, code lists and items, settings for `PARAM`, people and groups, templates |
+| `design` | The process designer's format (states, buttons, approval steps with approvers and “only when” conditions, outcomes) and `publish`: compiles it into `mt-lifecycle` definitions, checks them (closed loop, field references), creates or reuses the state field, keeps approval versions |
+| `access` | The access builder: grants (who, what, where, which records, limit, why), revocation, capability sets, separation-of-duties rules, the capability catalogue |
 | `process` | Lifecycles bound to tables, transitions, approvals (start, act, finish → state), approvers from the access policy, locks on frozen records and their lines, notices, and the views of tasks, approvals and the process design |
 | `formula` | How formulas see tables, records, linked records and the environment |
 | `view` | Values as people read them; field descriptions; decisions explained |
@@ -58,10 +61,12 @@ and the template gallery. Debug builds read `apps/web/dist` from disk.
 ## Tests
 
 `tests/api.rs` — 19 in-process API tests (every endpoint, as different people).
-`tests/builder.rs` — 7 tests that build the expense configuration of doc 14 (S3) from an empty
+`tests/builder.rs` — 11 tests that build the expense configuration of doc 14 (S3) from an empty
 workspace (base, tree code list, two tables, a two-way link, a roll-up, a formula reading a
 setting, people and groups), edit and delete safely, install the template, survive a restart,
-and refuse every malformed or unauthorised building block.
+design the claim lifecycle and approval, give access (sets, scopes, a limit, separation of
+duties, revocation), run the process as the employee, the manager and finance, keep running
+approvals on their version, and refuse every malformed or unauthorised step.
 `tests/process.rs` — 9 tests of lifecycles and approvals through the API: the seeded requests'
 history, submit → approve → order, the CFO step and sending back, rejection, revision,
 withdrawal, cancellation and deletion rules, every refused transition with its reasons, acts
@@ -70,5 +75,6 @@ missing reasons), a request nobody may approve (stuck, admins told), locks on li
 requests, and approvals surviving a restart.
 The browser walk-throughs in `apps/web/e2e` (Playwright, with screenshots) run against the
 release package in CI: `build.spec.ts` builds the expense configuration from an empty workspace
-(14 steps); `product.spec.ts` works with the purchasing sample (21 steps).
+(19 steps: data model, process design, access, and the process run by three people);
+`product.spec.ts` works with the purchasing sample (21 steps).
 Line coverage of this crate: see the coverage job (gate: 90 % from the API tests alone).

@@ -205,15 +205,29 @@ pub fn field(
     })
 }
 
+/// Where a grant applies, in words.
+#[must_use]
+pub fn place_of(ws: &Workspace, on: &Resource) -> String {
+    place(ws, on)
+}
+
 fn place(ws: &Workspace, on: &Resource) -> String {
     match on {
         Resource::Tenant => "the whole organisation".to_owned(),
         Resource::Workspace { .. } => "the workspace".to_owned(),
-        Resource::Base { .. } => "the Purchasing base".to_owned(),
+        Resource::Base { base, .. } => ws
+            .base(*base)
+            .map_or_else(|_| "a base".to_owned(), |b| format!("the {} base", b.name)),
         Resource::Table { table, .. } => ws
             .table(*table)
             .map_or_else(|_| table.to_string(), |t| format!("the {} table", t.name)),
     }
+}
+
+/// Which records a grant covers, in words.
+#[must_use]
+pub fn scope_of(ws: &Workspace, grant: &Grant) -> String {
+    scope_text(ws, grant)
 }
 
 fn scope_text(ws: &Workspace, grant: &Grant) -> String {

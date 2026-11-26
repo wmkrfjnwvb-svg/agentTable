@@ -1,3 +1,4 @@
+import AccessBuilder from "./Access";
 import { useEffect, useState } from "react";
 import { api, ApiError, Explanation, Person, TableSummary } from "./api";
 import { ExplainList } from "./TablePage";
@@ -255,12 +256,12 @@ export function RefDataPage() {
 }
 
 export function AccessPage({ people, tables }: { people: Person[]; tables: TableSummary[] }) {
-  const [who, setWho] = useState(people.find((p) => p.name.startsWith("Carol"))?.id ?? "");
+  const [who, setWho] = useState(people.find((p) => p.name.startsWith("Carol"))?.id ?? people[0]?.id ?? "");
   const [forWhom, setForWhom] = useState("");
   const [table, setTable] = useState(tables[1]?.id ?? tables[0]?.id ?? "");
   const [records, setRecords] = useState<{ id: string; title: string }[]>([]);
   const [record, setRecord] = useState("");
-  const [capability, setCapability] = useState("request.approve");
+  const [capability, setCapability] = useState("record.read");
   const [catalogue, setCatalogue] = useState<Awaited<ReturnType<typeof api.capabilities>> | null>(null);
   const [answer, setAnswer] = useState<Explanation | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -296,7 +297,7 @@ export function AccessPage({ people, tables }: { people: Person[]; tables: Table
     <div className="page" data-testid="access">
       <div className="page-head">
         <div>
-          <h1>Access &amp; explain</h1>
+          <h1>Access</h1>
           <p className="muted">Ask whether someone may do something — and why. The same engine decides every screen, export and AI call.</p>
         </div>
       </div>
@@ -368,18 +369,7 @@ export function AccessPage({ people, tables }: { people: Person[]; tables: Table
           {answer.allowed && answer.fields && <p className="small muted">Fields covered: {answer.fields.join(", ")}</p>}
         </div>
       )}
-      {catalogue && catalogue.rules.length > 0 && (
-        <div className="card">
-          <h3>Separation-of-duties rules</h3>
-          <ul>
-            {catalogue.rules.map((r) => (
-              <li key={r.name}>
-                <b>{r.name}</b>: <code>{r.first}</code> and <code>{r.second}</code> {r.kind === "hold" ? "are never held by the same person" : "are never used by the same person on one record"}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <AccessBuilder people={people} />
     </div>
   );
 }

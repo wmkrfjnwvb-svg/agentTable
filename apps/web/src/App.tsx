@@ -4,6 +4,7 @@ import TablePage from "./TablePage";
 import { AccessPage, AuditPage, OverviewPage, PlaceholderPage, PLACEHOLDERS, RefDataPage } from "./pages";
 import { ApprovalsPage, InboxPage } from "./Process";
 import { BasePage, HomePage, PeoplePage, SettingsPage } from "./Build";
+import DesignerPage from "./Designer";
 
 function useRoute(): string {
   const [route, setRoute] = useState(() => window.location.hash.slice(1) || "/");
@@ -80,10 +81,11 @@ export default function App() {
   const humans = people.filter((p) => p.kind === "member" || p.kind === "guest");
   const signIn = people.filter((p) => p.kind !== "group");
 
-  const [section, id] = route.replace(/^\//, "").split("/");
+  const [section, id, sub] = route.replace(/^\//, "").split("/");
   let page;
   const base = bases.find((b) => b.id === id);
-  if (section === "table" && id) page = <TablePage key={`${id}-${generation}`} tableId={id} onChanged={refresh} />;
+  if (section === "table" && id && sub === "process") page = <DesignerPage key={`${id}-${generation}`} tableId={id} />;
+  else if (section === "table" && id) page = <TablePage key={`${id}-${generation}`} tableId={id} onChanged={refresh} />;
   else if (section === "base" && base) page = <BasePage key={`${id}-${generation}`} base={base} onChanged={refresh} />;
   else if (section === "people") page = <PeoplePage key={generation} people={people} onChanged={loadPeople} />;
   else if (section === "settings") page = <SettingsPage key={generation} />;

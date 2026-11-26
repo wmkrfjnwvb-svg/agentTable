@@ -284,3 +284,14 @@ th.editable-head:hover { background: var(--accent-soft); }
 .nav-table { padding-left: 1.2rem; }
 .new-set { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.75rem; }
 tr.inactive td { color: var(--muted); }
+
+/* ---- process designer ---- */
+a.button { display: inline-block; font-weight: 500; padding: 0.45rem 0.9rem; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: white; text-decoration: none; }
+a.button.secondary { background: var(--surface); color: var(--text); border-color: var(--border); }
+.design-table td { vertical-align: top; }
+.design-table input:not([type="checkbox"]) { width: 100%; min-width: 9rem; }
+.row.wrap { flex-wrap: wrap; }
+.steps { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.step-card { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; background: var(--surface); }
+.approver, .condition { display: inline-flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; }
+.condition { font-size: 0.85rem; color: var(--muted); }

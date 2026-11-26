@@ -989,3 +989,546 @@ async fn std_a_built_workspace_survives_a_restart() {
     assert_eq!(bases["bases"][0]["name"], "Expenses");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ---- designing the process and giving access ----
+
+struct People {
+    mia: String,
+    max: String,
+    fiona: String,
+    finance: String,
+}
+
+async fn people(app: &Arc<App>) -> People {
+    let mia = id(
+        app,
+        "/api/people",
+        json!({"name": "Mia Miller", "kind": "member"}),
+    )
+    .await;
+    let max = id(
+        app,
+        "/api/people",
+        json!({"name": "Max Manager", "kind": "member"}),
+    )
+    .await;
+    let fiona = id(
+        app,
+        "/api/people",
+        json!({"name": "Fiona Finance", "kind": "member"}),
+    )
+    .await;
+    let finance = id(
+        app,
+        "/api/people",
+        json!({"name": "Finance team", "kind": "group", "members": [fiona]}),
+    )
+    .await;
+    People {
+        mia,
+        max,
+        fiona,
+        finance,
+    }
+}
+
+fn state(key: &str, name: &str, category: &str) -> Value {
+    json!({"key": key, "name": name, "category": category})
+}
+
+fn design(x: &Expenses, p: &People) -> Value {
+    json!({
+        "name": "Expense claim",
+        "states": [
+            state("draft", "Draft", "new"),
+            {"key": "submitted", "name": "Submitted", "category": "pending_approval", "locked": true, "required": [x.lines_link]},
+            {"key": "approved", "name": "Approved", "category": "in_progress", "locked": true},
+            state("paid", "Paid", "done_success"),
+            state("rejected", "Rejected", "done_failure"),
+        ],
+        "initial": "draft",
+        "transitions": [
+            {"key": "submit", "name": "Submit", "from": ["draft"], "to": "submitted"},
+            {"key": "withdraw", "name": "Withdraw", "from": ["submitted"], "to": "draft"},
+            {"key": "pay", "name": "Pay", "from": ["approved"], "to": "paid", "capability": "expense.pay"},
+            {"key": "revise", "name": "Revise", "from": ["rejected"], "to": "draft"},
+        ],
+        "approval": {
+            "name": "Expense approval",
+            "startedBy": "submit",
+            "approved": "approved",
+            "rejected": "rejected",
+            "returned": "draft",
+            "steps": [
+                {"kind": "approval", "name": "Manager", "approvers": [{"kind": "person", "id": p.max}], "mode": {"mode": "any"}, "canSendBack": true},
+                {"kind": "approval", "name": "Finance review", "approvers": [{"kind": "capability", "capability": "expense.finance_review"}], "mode": {"mode": "any"}, "when": {"field": x.needs_finance, "op": "eq", "text": "yes"}},
+                {"kind": "notify", "name": "Ready to pay", "to": [{"kind": "capability", "capability": "expense.pay"}]},
+            ],
+        },
+    })
+}
+
+async fn grant(app: &Arc<App>, body: Value) -> (StatusCode, Value) {
+    post(app, "/api/access/grants", body).await
+}
+
+async fn task(app: &Arc<App>, who: &str, title: &str) -> String {
+    let (_, tasks) = call(app, Method::GET, "/api/tasks", Some(who), None).await;
+    let task = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["title"] == title)
+        .unwrap_or_else(|| panic!("{who} has no task for {title}: {tasks}"));
+    format!("/api/approvals/{}/tasks/{}", task["run"], task["task"])
+}
+
+#[tokio::test]
+async fn std_a_designed_process_runs_with_the_access_that_was_given() {
+    let app = empty();
+    let x = build(&app).await;
+    let p = people(&app).await;
+    // Design and publish the process.
+    let (status, published) = call(
+        &app,
+        Method::PUT,
+        &format!("/api/tables/{}/process", x.claims),
+        Some(ALICE),
+        Some(design(&x, &p)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{published}");
+    let (_, info) = call(
+        &app,
+        Method::GET,
+        &format!("/api/tables/{}/process", x.claims),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(info["published"]["version"], 1);
+    assert_eq!(
+        info["design"]["approval"]["steps"][1]["when"]["text"],
+        "yes"
+    );
+    assert!(
+        columns(&app, &x.claims)
+            .await
+            .contains(&"Status".to_owned()),
+        "a state field was added"
+    );
+    // Give access: employees their own claims; the manager reads all; finance reviews and pays.
+    let (status, set) = post(&app, "/api/access/sets", json!({"name": "Employee", "capabilities": ["record.read", "record.create", "record.update"]})).await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    let employee = set["id"].as_str().unwrap().to_owned();
+    for body in [
+        json!({"to": p.mia, "set": employee, "on": {"kind": "base", "id": x.base}, "scope": "own", "reason": "Submits expenses"}),
+        json!({"to": p.max, "capability": "record.read", "on": {"kind": "base", "id": x.base}, "reason": "Approves the team's expenses"}),
+        json!({"to": p.finance, "capability": "record.read", "on": {"kind": "base", "id": x.base}}),
+        json!({"to": p.finance, "capability": "expense.finance_review", "on": {"kind": "table", "id": x.claims}}),
+        json!({"to": p.finance, "capability": "expense.pay", "on": {"kind": "table", "id": x.claims}, "limit": {"field": x.total, "op": "le", "text": "10000 USD"}}),
+    ] {
+        let (status, answer) = grant(&app, body).await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+    }
+    let (_, access) = call(&app, Method::GET, "/api/access", None, None).await;
+    let limits: Vec<&Value> = access["grants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| g["limit"].is_string())
+        .collect();
+    assert_eq!(limits[0]["limit"], "“Total” ≤ 10,000.00 USD");
+    assert!(access["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c == "expense.finance_review"));
+
+    // Mia: a claim of 1,250 USD (above the 1,000 limit: finance reviews).
+    let purpose = columns_id(&app, &x.claims, "Purpose").await;
+    let (status, claim) = call(
+        &app,
+        Method::POST,
+        &format!("/api/tables/{}/records", x.claims),
+        Some(&p.mia),
+        Some(json!({"cells": {&purpose: {"text": "Trade fair Paris"}}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    assert_eq!(claim["process"]["state"]["name"], "Draft");
+    let claim_id = claim["id"].as_str().unwrap().to_owned();
+    let description = columns_id(&app, &x.lines, "Description").await;
+    let mut line_ids = Vec::new();
+    for (text, amount) in [("Stand", "600"), ("Hotel", "650")] {
+        let (status, line) = call(&app, Method::POST, &format!("/api/tables/{}/records", x.lines), Some(&p.mia), Some(json!({"cells": {
+            &description: {"text": text}, &x.amount: {"text": amount}, &x.claim_link: {"value": {"type": "link", "value": [claim_id]}}
+        }}))).await;
+        assert_eq!(status, StatusCode::OK, "{line}");
+        line_ids.push(line["id"].as_str().unwrap().to_owned());
+    }
+    // Mia sees her claim only.
+    let (_, seen) = call(
+        &app,
+        Method::POST,
+        &format!("/api/tables/{}/query", x.claims),
+        Some(&p.mia),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(seen["count"], 1);
+    let path = format!("/api/tables/{}/records/{claim_id}", x.claims);
+    let (_, mine) = call(&app, Method::GET, &path, Some(&p.mia), None).await;
+    assert_eq!(
+        mine["process"]["wouldAsk"]["steps"][0]["people"],
+        json!(["Max Manager"])
+    );
+    assert_eq!(
+        mine["process"]["wouldAsk"]["steps"][1]["people"],
+        json!(["Fiona Finance"])
+    );
+    let (status, submitted) = call(
+        &app,
+        Method::POST,
+        &format!("{path}/transitions/submit"),
+        Some(&p.mia),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+    assert_eq!(submitted["process"]["state"]["name"], "Submitted");
+    // Locked while submitted, its lines too.
+    let (status, _) = call(
+        &app,
+        Method::PATCH,
+        &format!("/api/tables/{}/records/{}", x.lines, line_ids[0]),
+        Some(&p.mia),
+        Some(json!({"cells": {&x.amount: {"text": "700"}}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    // Max approves; Fiona reviews; Fiona pays.
+    let (status, after) = call(
+        &app,
+        Method::POST,
+        &task(&app, &p.max, "Trade fair Paris").await,
+        Some(&p.max),
+        Some(json!({"act": "approve"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+    assert_eq!(
+        after["process"]["state"]["name"], "Submitted",
+        "finance still reviews"
+    );
+    let (status, after) = call(
+        &app,
+        Method::POST,
+        &task(&app, &p.fiona, "Trade fair Paris").await,
+        Some(&p.fiona),
+        Some(json!({"act": "approve"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+    assert_eq!(after["process"]["state"]["name"], "Approved");
+    let (_, inbox) = call(&app, Method::GET, "/api/inbox", Some(&p.fiona), None).await;
+    assert!(
+        inbox
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["text"] == "“Trade fair Paris”: Ready to pay"),
+        "{inbox}"
+    );
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        &format!("{path}/transitions/pay"),
+        Some(&p.max),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "Max may not pay");
+    let (status, paid) = call(
+        &app,
+        Method::POST,
+        &format!("{path}/transitions/pay"),
+        Some(&p.fiona),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{paid}");
+    assert_eq!(paid["process"]["state"]["name"], "Paid");
+    let (_, inbox) = call(&app, Method::GET, "/api/inbox", Some(&p.mia), None).await;
+    assert_eq!(inbox[0]["text"], "“Trade fair Paris” was approved");
+}
+
+#[tokio::test]
+async fn invalid_designs_are_refused_with_the_reason() {
+    let app = empty();
+    let x = build(&app).await;
+    let p = people(&app).await;
+    let put = |body: Value| {
+        let app = app.clone();
+        let path = format!("/api/tables/{}/process", x.claims);
+        async move { call(&app, Method::PUT, &path, Some(ALICE), Some(body)).await }
+    };
+    let mut d = design(&x, &p);
+    d["states"] = json!([
+        state("draft", "Draft", "new"),
+        state("open", "Open", "in_progress")
+    ]);
+    d["transitions"] = json!([{"key": "go", "name": "Go", "from": ["draft"], "to": "open"}]);
+    d["approval"] = json!(null);
+    let (status, body) = put(d).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["message"].as_str().unwrap().contains("final state"),
+        "{body}"
+    );
+    let mut d = design(&x, &p);
+    d["transitions"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|t| t["key"] != "revise");
+    d["states"]
+        .as_array_mut()
+        .unwrap()
+        .push(state("on_hold", "On hold", "waiting_internal"));
+    let (status, body) = put(d).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("never be reached"),
+        "{body}"
+    );
+    let mut d = design(&x, &p);
+    d["states"][1]["category"] = json!("in_progress");
+    let (status, body) = put(d).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("pending approval"),
+        "{body}"
+    );
+    let mut d = design(&x, &p);
+    d["approval"]["steps"][0]["approvers"] = json!([]);
+    let (status, body) = put(d).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["message"].as_str().unwrap().contains("no approver"),
+        "{body}"
+    );
+    let mut d = design(&x, &p);
+    d["approval"]["steps"][1]["when"]["text"] = json!("lots");
+    let (status, _) = put(d).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let mut d = design(&x, &p);
+    d["approval"]["approved"] = json!("nowhere");
+    let (status, _) = put(d).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _) = call(
+        &app,
+        Method::PUT,
+        &format!("/api/tables/{}/process", x.claims),
+        Some(&p.mia),
+        Some(design(&x, &p)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "Mia does not design processes"
+    );
+    // Published; a record in Paid; the design may not drop Paid then.
+    let (status, _) = put(design(&x, &p)).await;
+    assert_eq!(status, StatusCode::OK);
+    let mut d = design(&x, &p);
+    d["states"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|s| s["key"] != "rejected");
+    d["transitions"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|t| t["key"] != "revise");
+    d["approval"]["rejected"] = json!("draft");
+    let (status, body) = put(d).await;
+    assert_eq!(status, StatusCode::OK, "nobody is in Rejected: {body}");
+}
+
+#[tokio::test]
+async fn std_running_approvals_keep_their_version() {
+    let app = empty();
+    let x = build(&app).await;
+    let p = people(&app).await;
+    let path = format!("/api/tables/{}/process", x.claims);
+    call(&app, Method::PUT, &path, Some(ALICE), Some(design(&x, &p))).await;
+    // Alice submits her claim (she created it; Max is asked).
+    grant(
+        &app,
+        json!({"to": p.max, "capability": "record.read", "on": {"kind": "base", "id": x.base}}),
+    )
+    .await;
+    let purpose = columns_id(&app, &x.claims, "Purpose").await;
+    let (_, claim) = post(
+        &app,
+        &format!("/api/tables/{}/records", x.claims),
+        json!({"cells": {&purpose: {"text": "Taxi"}}}),
+    )
+    .await;
+    let claim_id = claim["id"].as_str().unwrap().to_owned();
+    let description = columns_id(&app, &x.lines, "Description").await;
+    post(&app, &format!("/api/tables/{}/records", x.lines), json!({"cells": {&description: {"text": "Ride"}, &x.amount: {"text": "30"}, &x.claim_link: {"value": {"type": "link", "value": [claim_id]}}}})).await;
+    let (status, body) = post(
+        &app,
+        &format!(
+            "/api/tables/{}/records/{claim_id}/transitions/submit",
+            x.claims
+        ),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // The same design again: no new version. A changed step: version 2.
+    call(&app, Method::PUT, &path, Some(ALICE), Some(design(&x, &p))).await;
+    let (_, info) = call(&app, Method::GET, &path, None, None).await;
+    assert_eq!(info["published"]["version"], 1);
+    assert_eq!(info["running"], 1);
+    let mut d = design(&x, &p);
+    d["approval"]["steps"][0]["name"] = json!("Line manager");
+    call(&app, Method::PUT, &path, Some(ALICE), Some(d)).await;
+    let (_, info) = call(&app, Method::GET, &path, None, None).await;
+    assert_eq!(info["published"]["version"], 2);
+    // The running approval still runs on version 1 and finishes.
+    let (status, after) = call(
+        &app,
+        Method::POST,
+        &task(&app, &p.max, "Taxi").await,
+        Some(&p.max),
+        Some(json!({"act": "approve"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+    assert_eq!(after["process"]["approval"]["version"], 1);
+    assert_eq!(after["process"]["state"]["name"], "Approved");
+}
+
+#[tokio::test]
+async fn std_access_is_given_revoked_and_kept_apart() {
+    let app = empty();
+    let x = build(&app).await;
+    let p = people(&app).await;
+    // Separation of duties: who reviews does not pay.
+    let (status, body) = post(&app, "/api/access/rules", json!({"name": "Reviewers do not pay", "first": "expense.finance_review", "second": "expense.pay", "kind": "hold"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = grant(&app, json!({"to": p.fiona, "capability": "expense.finance_review", "on": {"kind": "table", "id": x.claims}})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = grant(&app, json!({"to": p.finance, "capability": "expense.pay", "on": {"kind": "table", "id": x.claims}})).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "Fiona is in the finance team: {body}"
+    );
+    // Revoked access is gone at once, and stays on record.
+    let (_, given) = grant(
+        &app,
+        json!({"to": p.max, "capability": "record.read", "on": {"kind": "table", "id": x.claims}}),
+    )
+    .await;
+    let grant_id = given["id"].as_str().unwrap().to_owned();
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        &format!("/api/tables/{}/query", x.claims),
+        Some(&p.max),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        &app,
+        Method::DELETE,
+        &format!("/api/access/grants/{grant_id}"),
+        Some(ALICE),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        &format!("/api/tables/{}/query", x.claims),
+        Some(&p.max),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = call(
+        &app,
+        Method::DELETE,
+        &format!("/api/access/grants/{grant_id}"),
+        Some(ALICE),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "revoked already");
+    let (_, access) = call(&app, Method::GET, "/api/access", None, None).await;
+    assert!(access["grants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|g| g["id"] == grant_id.as_str() && g["active"] == false));
+    // Refusals.
+    for body in [
+        json!({"to": p.max, "on": {"kind": "workspace"}}),
+        json!({"to": p.max, "capability": "Not a key", "on": {"kind": "workspace"}}),
+        json!({"to": p.max, "capability": "record.read", "on": {"kind": "base", "id": x.base}, "scope": "everything"}),
+        json!({"to": p.max, "capability": "record.read", "on": {"kind": "base", "id": x.base}, "limit": {"field": x.total, "op": "le", "text": "1 USD"}}),
+    ] {
+        let (status, answer) = grant(&app, body).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{answer}");
+    }
+    let (status, _) = grant(&app, json!({"to": p.max, "capability": "record.read", "on": {"kind": "table", "id": "tbl_0000000000000000000000000z"}})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        "/api/access/grants",
+        Some(&p.max),
+        Some(json!({"to": p.max, "capability": "access.manage", "on": {"kind": "workspace"}})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "nobody gives themselves access"
+    );
+    let (status, _) = post(
+        &app,
+        "/api/access/sets",
+        json!({"name": "Empty", "capabilities": []}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _) = post(
+        &app,
+        "/api/access/sets",
+        json!({"name": " ", "capabilities": ["record.read"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _) = call(
+        &app,
+        Method::DELETE,
+        "/api/access/grants/grt_0000000000000000000000000z",
+        Some(ALICE),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

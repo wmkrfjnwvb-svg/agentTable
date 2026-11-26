@@ -672,7 +672,7 @@ async fn invalid_changes_are_refused_with_reasons() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     // Nothing of this reached the audit log.
     let (_, entries) = call(&app, Method::GET, "/api/audit", None, None).await;
-    assert_eq!(entries.as_array().unwrap().len(), 33);
+    assert_eq!(entries.as_array().unwrap().len(), 34);
 }
 
 #[tokio::test]
@@ -783,10 +783,11 @@ async fn std_options_for_every_kind_of_field() {
             "Draft",
             "Submitted",
             "Approved",
-            "Rejected",
             "Ordered",
+            "Rejected",
             "Cancelled"
-        ]
+        ],
+        "in the order of the lifecycle"
     );
     let (_, centres) = call(
         &app,
@@ -1238,12 +1239,13 @@ async fn std_the_audit_chain() {
     }
     let (_, entries) = call(&app, Method::GET, "/api/audit", Some(DAVE), None).await;
     let entries = entries.as_array().unwrap();
-    assert_eq!(entries.len(), 33);
-    assert_eq!(entries[0]["seq"], 33, "newest first");
+    assert_eq!(entries.len(), 34);
+    assert_eq!(entries[0]["seq"], 34, "newest first");
     assert_eq!(
-        entries[32]["action"], "template.install",
+        entries[33]["action"], "template.install",
         "the sample was installed first"
     );
+    assert_eq!(entries[32]["action"], "process.publish", "then its process");
     assert_eq!(entries[0]["action"], "record.transition");
     assert_eq!(entries[0]["actor"], "Dave Finance");
     assert_eq!(entries[0]["details"]["to"], "Ordered");
@@ -1252,7 +1254,7 @@ async fn std_the_audit_chain() {
     assert_eq!(entries[31]["prev"].as_str().unwrap().len(), 64);
     let (_, verdict) = call(&app, Method::GET, "/api/audit/verify", Some(DAVE), None).await;
     assert_eq!(verdict["intact"], true);
-    assert_eq!(verdict["entries"], 33);
+    assert_eq!(verdict["entries"], 34);
     let (_, tampered) = call(
         &app,
         Method::POST,
@@ -1291,7 +1293,7 @@ async fn std_the_audit_chain() {
     assert_eq!(entries[0]["initiator"], "Bob Buyer");
     assert_eq!(entries[0]["details"]["changes"][0]["from"], "6");
     let (_, verdict) = call(&app, Method::GET, "/api/audit/verify", None, None).await;
-    assert_eq!(verdict["entries"], 34);
+    assert_eq!(verdict["entries"], 35);
 }
 
 #[tokio::test]
@@ -1331,7 +1333,7 @@ async fn std_the_workspace_is_saved_and_reopened() {
         "2,764.80 USD"
     );
     let (_, verdict) = call(&reopened, Method::GET, "/api/audit/verify", None, None).await;
-    assert_eq!(verdict["entries"], 34);
+    assert_eq!(verdict["entries"], 35);
     // A damaged file is reported, not ignored.
     std::fs::write(&file, b"{ not json").unwrap();
     assert!(mt_server::open(

@@ -244,6 +244,179 @@ test.describe.serial("build your own: expense claims from scratch", () => {
     await expect(page.locator("thead")).toContainText("Total");
   });
 
+  test("the process is designed: states, buttons and an approval", async () => {
+    await openTable(page, "Expense claims");
+    await page.getByTestId("design-process").click();
+    await expect(page.getByTestId("designer")).toBeVisible();
+    // The starting point: Draft → Done. Done becomes Submitted, waiting for approval.
+    await page.getByTestId("state-name-1").fill("Submitted");
+    await page.getByTestId("state-category-1").selectOption("pending_approval");
+    await page.getByTestId("state-locked-1").check();
+    await page.getByTestId("state-required-1-Lines").click();
+    for (const [name, category, locked] of [
+      ["Approved", "in_progress", true],
+      ["Paid", "done_success", false],
+      ["Rejected", "done_failure", false],
+    ] as const) {
+      await page.getByTestId("add-state").click();
+      const i = (await page.getByTestId("state-row").count()) - 1;
+      await page.getByTestId(`state-name-${i}`).fill(name);
+      await page.getByTestId(`state-category-${i}`).selectOption(category);
+      if (locked) await page.getByTestId(`state-locked-${i}`).check();
+    }
+    await page.getByTestId("button-name-0").fill("Submit");
+    for (const [name, from, to, capability] of [
+      ["Pay", "Approved", "Paid", "expense.pay"],
+      ["Revise", "Rejected", "Draft", ""],
+      ["Withdraw", "Submitted", "Draft", ""],
+    ]) {
+      await page.getByTestId("add-button").click();
+      const i = (await page.getByTestId("button-row").count()) - 1;
+      await page.getByTestId(`button-name-${i}`).fill(name);
+      await page.getByTestId(`button-from-${i}-${from}`).click();
+      await page.getByTestId(`button-to-${i}`).selectOption({ label: to });
+      if (capability) await page.getByTestId(`button-capability-${i}`).fill(capability);
+    }
+    // The approval: the manager, then finance only above the limit; finance is told to pay.
+    await page.getByTestId("approval-enabled").check();
+    await page.getByTestId("approval-name").fill("Expense approval");
+    await page.getByTestId("approval-start").selectOption({ label: "Submit" });
+    await page.getByTestId("approval-approved").selectOption({ label: "Approved" });
+    await page.getByTestId("approval-rejected").selectOption({ label: "Rejected" });
+    await page.getByTestId("approval-returned").selectOption({ label: "Draft" });
+    await page.getByTestId("add-step").click();
+    await page.getByTestId("step-name-0").fill("Manager");
+    await page.getByTestId("step-0-add-approver").click();
+    await page.getByTestId("step-0-approver-0-person").selectOption({ label: "Max Manager" });
+    await page.getByTestId("add-step").click();
+    await page.getByTestId("step-name-1").fill("Finance review");
+    await page.getByTestId("step-1-add-approver").click();
+    await page.getByTestId("step-1-approver-0-kind").selectOption("capability");
+    await page.getByTestId("step-1-approver-0-capability").fill("expense.finance_review");
+    await page.getByTestId("step-when-1-add").click();
+    await page.getByTestId("step-when-1-field").selectOption({ label: "Needs finance" });
+    await page.getByTestId("step-when-1-value").selectOption("yes");
+    await page.getByTestId("add-step").click();
+    await page.getByTestId("step-kind-2").selectOption("notify");
+    await page.getByTestId("step-name-2").fill("Ready to pay");
+    await page.getByTestId("step-2-add-approver").click();
+    await page.getByTestId("step-2-approver-0-kind").selectOption("capability");
+    await page.getByTestId("step-2-approver-0-capability").fill("expense.pay");
+    // A state nothing leads to is refused, with the reason.
+    await page.getByTestId("add-state").click();
+    const extra = (await page.getByTestId("state-row").count()) - 1;
+    await page.getByTestId(`state-name-${extra}`).fill("On hold");
+    await page.getByTestId("publish-process").click();
+    await expect(page.getByTestId("designer-message")).toContainText("the state “On hold” can never be reached");
+    await shot(page, "14-design-refused");
+    await page.getByTestId(`remove-state-${extra}`).click();
+    await page.getByTestId("publish-process").click();
+    await expect(page.getByTestId("designer-message")).toContainText("Published");
+    await expect(page.getByTestId("designer")).toContainText("Approval “Expense approval” version 1");
+    await shot(page, "15-process-designed");
+  });
+
+  test("access is given: employees, the manager, finance with a limit", async () => {
+    await page.getByTestId("nav-access").click();
+    await page.getByTestId("set-name").fill("Employee");
+    for (const c of ["record.read", "record.create", "record.update"]) await page.getByTestId(`set-cap-${c}`).click();
+    await page.getByTestId("create-cap-set").click();
+    await expect(page.getByTestId("access-message")).toHaveText("Set created.");
+    const give = async (to: string, what: string, place: string, scope = "all", reason = "") => {
+      await page.getByTestId("grant-to").selectOption({ label: to });
+      if (what.startsWith("set:")) {
+        await page.getByTestId("grant-kind").selectOption("set");
+        await page.getByTestId("grant-set").selectOption({ label: what.slice(4) });
+      } else {
+        await page.getByTestId("grant-kind").selectOption("capability");
+        await page.getByTestId("grant-capability").fill(what);
+      }
+      await page.getByTestId("grant-place").selectOption({ label: place });
+      await page.getByTestId("grant-scope").selectOption(scope);
+      if (what === "expense.pay") {
+        await page.getByTestId("grant-limit-add").click();
+        await page.getByTestId("grant-limit-field").selectOption({ label: "Total" });
+        await page.getByTestId("grant-limit-op").selectOption("le");
+        await page.getByTestId("grant-limit-value").fill("10000 USD");
+      }
+      await page.getByTestId("grant-reason").fill(reason);
+      await page.getByTestId("give-grant").click();
+      await expect(page.getByTestId("access-message")).toHaveText("Given.");
+    };
+    await give("Mia Miller", "set:Employee", "the base Expenses", "own", "Submits her expenses");
+    await give("Max Manager", "record.read", "the base Expenses", "all", "Approves the team's expenses");
+    await give("Finance team (group)", "record.read", "the base Expenses");
+    await give("Finance team (group)", "expense.finance_review", "  the table Expense claims");
+    await give("Finance team (group)", "expense.pay", "  the table Expense claims", "all", "Pays approved claims");
+    await expect(page.getByTestId("grants")).toContainText("“Total” ≤ 10,000.00 USD");
+    await page.getByTestId("grants").scrollIntoViewIfNeeded();
+    await shot(page, "16-access-given");
+  });
+
+  test("Mia enters and submits a claim; she sees only her own", async () => {
+    await page.getByTestId("user-select").selectOption({ label: "Mia Miller — Sales — submits expenses" });
+    await openTable(page, "Expense claims");
+    await expect(page.getByTestId("row-count")).toHaveText("0");
+    await page.getByTestId("new-record").click();
+    await page.getByTestId("edit-Trip purpose").fill("Trade fair Paris");
+    await page.getByTestId("save").click();
+    await expect(page.getByTestId("panel-message")).toHaveText("Saved.");
+    await page.getByTestId("close-panel").click();
+    await openTable(page, "Expense lines");
+    for (const [description, amount] of [["Stand rental", "600"], ["Hotel Paris", "650"]]) {
+      await page.getByTestId("new-record").click();
+      await page.getByTestId("edit-Description").fill(description);
+      await page.getByTestId("edit-Amount").fill(amount);
+      await page.getByTestId("edit-Claim").selectOption({ label: "Trade fair Paris" });
+      await page.getByTestId("save").click();
+      await expect(page.getByTestId("panel-message")).toHaveText("Saved.");
+      await page.getByTestId("close-panel").click();
+    }
+    await expect(page.getByTestId("row-count")).toHaveText("2");
+    await openTable(page, "Expense claims");
+    await row(page, "Trade fair Paris").click();
+    await expect(page.getByTestId("state")).toHaveText("Draft");
+    await expect(page.getByTestId("would-ask")).toContainText("Max Manager");
+    await expect(page.getByTestId("would-ask")).toContainText("Fiona Finance");
+    await page.getByTestId("transition-submit").click();
+    await expect(page.getByTestId("state")).toHaveText("Submitted");
+    await expect(page.getByTestId("timeline")).toContainText("Max Manager");
+    await shot(page, "17-mia-submitted");
+    await page.getByTestId("close-panel").click();
+  });
+
+  test("Max approves; finance reviews because the total is above the limit", async () => {
+    await page.getByTestId("user-select").selectOption({ label: "Max Manager — Head of sales — approves" });
+    await page.getByTestId("nav-approvals").click();
+    await page.getByTestId("task-card").filter({ hasText: "Trade fair Paris" }).click();
+    await page.getByTestId("task-comment").fill("Good value");
+    await page.getByTestId("task-approve").click();
+    await expect(page.getByTestId("task-done")).toContainText("your decision is recorded");
+    await page.getByTestId("user-select").selectOption({ label: "Fiona Finance — Finance — reviews and pays" });
+    await page.getByTestId("nav-approvals").click();
+    await page.getByTestId("task-card").filter({ hasText: "Trade fair Paris" }).click();
+    await expect(page.getByTestId("timeline")).toContainText("Good value");
+    await shot(page, "18-finance-review");
+    await page.getByTestId("task-approve").click();
+    await expect(page.getByTestId("task-done")).toContainText("Approved");
+  });
+
+  test("finance pays; Mia is told", async () => {
+    await page.getByTestId("nav-inbox").click();
+    await expect(page.getByTestId("inbox")).toContainText("“Trade fair Paris”: Ready to pay");
+    await openTable(page, "Expense claims");
+    await row(page, "Trade fair Paris").click();
+    await page.getByTestId("transition-pay").click();
+    await expect(page.getByTestId("state")).toHaveText("Paid");
+    await shot(page, "19-paid");
+    await page.getByTestId("close-panel").click();
+    await page.getByTestId("user-select").selectOption({ label: "Mia Miller — Sales — submits expenses" });
+    await page.getByTestId("nav-inbox").click();
+    await expect(page.getByTestId("inbox")).toContainText("“Trade fair Paris” was approved");
+    await shot(page, "20-mia-told");
+    await page.getByTestId("user-select").selectOption({ label: "Alice Admin — Workspace administrator" });
+  });
+
   test("a template installs next to what was built", async () => {
     await page.getByTestId("nav-home").click();
     await page.getByTestId("install-purchasing").click();
@@ -251,16 +424,16 @@ test.describe.serial("build your own: expense claims from scratch", () => {
     await expect(page.getByTestId("base-cards")).toContainText("Purchasing");
     await expect(page.getByTestId("base-cards")).toContainText("Expenses");
     await expect(page.getByTestId("nav-Purchase requests")).toBeVisible();
-    await shot(page, "12-template-installed");
+    await shot(page, "21-template-installed");
   });
 
   test("everything built is in the audit chain", async () => {
     await page.getByTestId("nav-audit").click();
-    for (const action of ["base.create", "refset.create", "table.create", "field.create", "setting.update", "member.create", "template.install"]) {
+    for (const action of ["base.create", "refset.create", "table.create", "field.create", "setting.update", "member.create", "process.publish", "access.grant", "approval.approve", "template.install"]) {
       await expect(page.getByTestId("audit-entries")).toContainText(action);
     }
     await page.getByTestId("verify").click();
     await expect(page.getByTestId("verdict")).toContainText("Chain intact");
-    await shot(page, "13-audit");
+    await shot(page, "22-audit");
   });
 });

@@ -109,6 +109,41 @@ impl RecordFacts for Record {
     }
 }
 
+/// The field through which the access policy sees who created a record: the creator owns
+/// it ("records they own" includes what someone entered), in every table.
+pub const CREATOR: FieldId = FieldId::from_u128(u128::MAX);
+
+/// A record as the access policy sees it: its cells, and its creator as an owner.
+pub struct Seen<'r> {
+    record: &'r Record,
+    creator: Value,
+}
+
+impl<'r> Seen<'r> {
+    /// The record, seen by the policy.
+    #[must_use]
+    pub fn new(record: &'r Record) -> Self {
+        Seen {
+            record,
+            creator: Value::Principal(vec![record.created_by]),
+        }
+    }
+}
+
+impl RecordFacts for Seen<'_> {
+    fn id(&self) -> RecordId {
+        self.record.id
+    }
+
+    fn value(&self, field: FieldId) -> Option<&Value> {
+        if field == CREATOR {
+            Some(&self.creator)
+        } else {
+            self.record.cells.get(&field)
+        }
+    }
+}
+
 /// A table: its fields, field groups and records.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Table {
@@ -472,6 +507,7 @@ impl Workspace {
         prior: &[Capability],
         now: Timestamp,
     ) -> Decision {
+        let seen = record.map(Seen::new);
         let ctx = context(now);
         let env = mt_perm::Env {
             directory: self,
@@ -483,7 +519,7 @@ impl Workspace {
                 actor,
                 capability,
                 on,
-                record: record.map(|r| r as &dyn RecordFacts),
+                record: seen.as_ref().map(|r| r as &dyn RecordFacts),
                 prior,
                 now,
             },
@@ -562,6 +598,7 @@ impl Workspace {
         record: Option<&Record>,
         now: Timestamp,
     ) -> BTreeMap<FieldId, FieldPermission> {
+        let seen = record.map(Seen::new);
         let ctx = context(now);
         let env = mt_perm::Env {
             directory: self,
@@ -571,7 +608,7 @@ impl Workspace {
         self.data.policy.field_permissions(
             actor,
             table.resource(),
-            record.map(|r| r as &dyn RecordFacts),
+            seen.as_ref().map(|r| r as &dyn RecordFacts),
             now,
             &env,
             &self.field_meta(table),
@@ -598,7 +635,7 @@ impl Workspace {
         table
             .records
             .iter()
-            .filter(|record| filter.admits(*record, &env))
+            .filter(|record| filter.admits(&Seen::new(record), &env))
             .collect()
     }
 
@@ -1287,6 +1324,7 @@ impl Facts for Workspace {
                             )
                     })
                     .map(|f| f.id)
+                    .chain([CREATOR])
                     .collect()
             },
         )

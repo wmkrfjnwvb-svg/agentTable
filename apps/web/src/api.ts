@@ -272,6 +272,28 @@ export const api = {
   updatePerson: (id: string, patch: { name?: string; title?: string; members?: string[] }) => call<{ updated: boolean }>("PATCH", `/api/people/${id}`, patch),
   settings: () => call<Setting[]>("GET", "/api/settings"),
   setSetting: (key: string, type: string, text: string) => call<{ updated: boolean }>("PUT", `/api/settings/${encodeURIComponent(key)}`, { type, text }),
+  processDesign: (table: string) =>
+    call<{
+      table: { id: string; name: string };
+      design: unknown;
+      published: { name: string; version: number } | null;
+      running: number;
+      fields: { id: string; name: string; dataType: string; type: string; generated: boolean; options: { id: string; label: string }[] | null }[];
+      canDesign: boolean;
+    }>("GET", `/api/tables/${table}/process`),
+  publishProcess: (table: string, design: unknown) => call<{ design: unknown }>("PUT", `/api/tables/${table}/process`, design),
+  access: () =>
+    call<{
+      grants: { id: string; to: string; toId: string; what: string; on: string; scope: string; limit: string | null; reason: string; grantedBy: string; active: boolean }[];
+      sets: { id: string; name: string; capabilities: string[] }[];
+      rules: { name: string; first: string; second: string; kind: string }[];
+      capabilities: string[];
+      canManage: boolean;
+    }>("GET", "/api/access"),
+  giveGrant: (spec: unknown) => call<{ id: string }>("POST", "/api/access/grants", spec),
+  revokeGrant: (id: string) => call<{ revoked: boolean }>("DELETE", `/api/access/grants/${id}`),
+  createSet: (name: string, capabilities: string[]) => call<{ id: string }>("POST", "/api/access/sets", { name, capabilities }),
+  addRule: (name: string, first: string, second: string, kind: string) => call<{ id: string }>("POST", "/api/access/rules", { name, first, second, kind }),
   templates: () => call<Template[]>("GET", "/api/templates"),
   installTemplate: (key: string) => call<{ installed: string }>("POST", `/api/templates/${key}/install`),
   transition: (table: string, record: string, key: string) => call<RecordDetail>("POST", `/api/tables/${table}/records/${record}/transitions/${key}`),

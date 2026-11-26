@@ -68,6 +68,9 @@ pub struct Binding {
     pub on_rejected: String,
     /// The transition taken when an approver sends the request back.
     pub on_returned: String,
+    /// The design it was published from (the designer edits it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<crate::design::ProcessDesign>,
 }
 
 /// One approval of one record.

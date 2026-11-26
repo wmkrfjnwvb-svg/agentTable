@@ -462,9 +462,9 @@ async fn invalid_transitions_are_refused_with_every_reason() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["details"].as_array().unwrap().len(), 3);
     // Steps the approval takes cannot be taken by hand.
-    let (status, body) = go(&app, ALICE, "Laptops for new hires", "approve").await;
+    let (status, body) = go(&app, ALICE, "Laptops for new hires", "submit_approved").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(body["message"], "“Approve” is decided by the approval");
+    assert_eq!(body["message"], "“Approved” is decided by the approval");
     // Unknown transitions, wrong states, tables without a lifecycle.
     let (status, _) = go(&app, ALICE, "Office chairs", "teleport").await;
     assert_eq!(status, StatusCode::NOT_FOUND);

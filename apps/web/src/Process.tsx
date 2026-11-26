@@ -359,7 +359,8 @@ function TaskList({ onCount }: { onCount: (n: number) => void }) {
             </div>
             <dl className="facts">
               {record.fields
-                .filter((f) => ["Supplier", "Cost centre", "Needed by", "Lines", "Total", "Needs CFO"].includes(f.name))
+                .filter((f) => !f.primary && f.type !== "lifecycle_state" && f.dataType !== "long_text" && f.cell?.d)
+                .slice(0, 8)
                 .map((f) => (
                   <div key={f.id}>
                     <dt>{f.name}</dt>

@@ -141,6 +141,18 @@ pub fn routes() -> Router<Shared> {
         .route("/api/people/{person}", patch(update_person))
         .route("/api/settings", get(settings))
         .route("/api/settings/{key}", put(set_setting))
+        .route(
+            "/api/tables/{table}/process",
+            get(process_design).put(publish_process),
+        )
+        .route("/api/access", get(access_overview))
+        .route("/api/access/grants", post(give_grant))
+        .route(
+            "/api/access/grants/{grant}",
+            axum::routing::delete(revoke_grant),
+        )
+        .route("/api/access/sets", post(create_set))
+        .route("/api/access/rules", post(add_rule))
         .route("/api/templates", get(templates))
         .route("/api/templates/{key}/install", post(install_template))
         .route("/api/tables/{table}/query", post(query))
@@ -1706,6 +1718,186 @@ async fn set_setting(
     Ok(Json(json!({"updated": true})))
 }
 
+async fn process_design(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+) -> Reply {
+    let ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let now = app.clock.now();
+    let table_id: TableId = parse(&table, "table")?;
+    let table = ws.table(table_id)?;
+    let fields: Vec<JsonValue> = table
+        .fields
+        .iter()
+        .map(|f| {
+            json!({
+                "id": f.id,
+                "name": f.name,
+                "dataType": f.data_type.as_str(),
+                "type": mt_core::fieldtype::BuiltinType::of(f).as_str(),
+                "generated": f.is_generated(),
+                "options": f.inline_options().map(|o| o.iter().filter(|x| x.enabled).map(|x| json!({"id": x.id, "label": x.label})).collect::<Vec<_>>()),
+            })
+        })
+        .collect();
+    let binding = crate::process::binding(&ws, table_id);
+    let approval = binding
+        .and_then(|b| {
+            b.lifecycle
+                .transitions
+                .iter()
+                .find_map(|t| t.approval.clone())
+        })
+        .and_then(|key| {
+            ws.data
+                .process
+                .definitions
+                .iter()
+                .filter(|d| d.key == key)
+                .max_by_key(|d| d.version)
+                .map(|d| json!({"name": d.name, "version": d.version}))
+        });
+    let running = ws
+        .data
+        .process
+        .runs
+        .iter()
+        .filter(|r| r.table == table_id && !r.approval.status.is_final())
+        .count();
+    let manage = ws
+        .decide(
+            actor,
+            &Action::SchemaManage.into(),
+            table.resource(),
+            None,
+            &[],
+            now,
+        )
+        .allowed;
+    Ok(Json(json!({
+        "table": {"id": table.id, "name": table.name},
+        "design": crate::design::design_of(&ws, table_id),
+        "published": approval,
+        "running": running,
+        "fields": fields,
+        "canDesign": manage,
+    })))
+}
+
+async fn publish_process(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+    Json(design): Json<crate::design::ProcessDesign>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let table_id: TableId = parse(&table, "table")?;
+    crate::design::publish(&mut ws, actor, table_id, design, app.clock.now())?;
+    app.save(&ws)?;
+    Ok(Json(
+        json!({"design": crate::design::design_of(&ws, table_id)}),
+    ))
+}
+
+async fn access_overview(State(app): State<Shared>, headers: HeaderMap) -> Reply {
+    let ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let manage = ws
+        .decide(
+            actor,
+            &Action::AccessManage.into(),
+            Resource::Tenant,
+            None,
+            &[],
+            app.clock.now(),
+        )
+        .allowed;
+    let mut overview = crate::access::overview(&ws);
+    if let JsonValue::Object(map) = &mut overview {
+        map.insert("canManage".to_owned(), json!(manage));
+    }
+    Ok(Json(overview))
+}
+
+async fn give_grant(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(spec): Json<crate::access::GrantSpec>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let id = crate::access::give(&mut ws, actor, &spec, app.clock.now())?;
+    app.save(&ws)?;
+    Ok(Json(json!({"id": id})))
+}
+
+async fn revoke_grant(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(grant): Path<String>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    crate::access::revoke(&mut ws, actor, parse(&grant, "grant")?, app.clock.now())?;
+    app.save(&ws)?;
+    Ok(Json(json!({"revoked": true})))
+}
+
+#[derive(Debug, Deserialize)]
+struct NewSet {
+    name: String,
+    capabilities: Vec<String>,
+}
+
+async fn create_set(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<NewSet>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let id = crate::access::create_set(
+        &mut ws,
+        actor,
+        &body.name,
+        &body.capabilities,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"id": id})))
+}
+
+#[derive(Debug, Deserialize)]
+struct NewRule {
+    name: String,
+    first: String,
+    second: String,
+    kind: mt_perm::SodKind,
+}
+
+async fn add_rule(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<NewRule>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let id = crate::access::add_rule(
+        &mut ws,
+        actor,
+        &body.name,
+        &body.first,
+        &body.second,
+        body.kind,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"id": id})))
+}
+
 async fn templates(State(app): State<Shared>) -> Json<JsonValue> {
     let ws = app.ws.lock().await;
     let list: Vec<JsonValue> = crate::seed::templates()
@@ -1814,19 +2006,7 @@ async fn refset(
 
 async fn capabilities(State(app): State<Shared>) -> Json<JsonValue> {
     let ws = app.ws.lock().await;
-    let mut keys: Vec<String> = Action::ALL.iter().map(|a| a.key().to_owned()).collect();
-    for set in ws.data.policy.sets() {
-        for capability in &set.capabilities {
-            keys.push(capability.key().to_owned());
-        }
-    }
-    for grant in ws.data.policy.grants() {
-        if let mt_perm::Granted::Capability(capability) = &grant.what {
-            keys.push(capability.key().to_owned());
-        }
-    }
-    keys.sort();
-    keys.dedup();
+    let keys = crate::access::catalogue(&ws);
     let rules: Vec<JsonValue> = ws
         .data
         .policy
