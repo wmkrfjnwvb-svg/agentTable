@@ -2,7 +2,7 @@
 // server; the web app only shows what the server answers.
 
 export type Value = { type: string; value?: unknown };
-export type Cell = { d: string; v?: Value; masked?: boolean; hidden?: boolean; error?: string };
+export type Cell = { d: string; v?: Value; items?: string[]; masked?: boolean; hidden?: boolean; error?: string };
 
 export type Column = {
   id: string;
@@ -26,11 +26,13 @@ export type Column = {
   visibility: "visible" | "masked" | "hidden" | null;
   editable: boolean;
   lockedReason?: string;
+  options?: { id: string; label: string; enabled: boolean }[] | null;
   cell?: Cell;
 };
 
 export type TableInfo = {
   id: string;
+  base: string;
   name: string;
   description: string;
   primary: string;
@@ -178,7 +180,17 @@ export type Act =
   | { act: "comment"; text: string };
 
 export type Person = { id: string; name: string; kind: string; title: string; members: string[] };
-export type TableSummary = { id: string; name: string; description: string; records: number; canRead: boolean };
+export type TableSummary = { id: string; base: string; name: string; description: string; records: number; canRead: boolean };
+export type BaseSummary = {
+  id: string;
+  name: string;
+  description: string;
+  canManageSchema: boolean;
+  tables: { id: string; name: string; records: number; canRead: boolean }[];
+};
+export type Setting = { key: string; type: string; value: string };
+export type Template = { key: string; name: string; description: string; installed: boolean };
+export type FieldPatch = { name?: string; required?: boolean; help?: string; options?: { id?: string; label: string }[] };
 export type Option = { value: Value | string; label: string; color?: string; path?: string; depth?: number };
 
 export type ApiError = { status: number; code: string; message: string; details?: unknown };
@@ -244,6 +256,24 @@ export const api = {
     call<{ seq: number; hash: string; prev: string; actor: string; initiator: string; action: string; object: string; details: Record<string, unknown> | null; at: string }[]>("GET", "/api/audit"),
   verify: () => call<{ intact: boolean; entries?: number; head?: string; seq?: number; kind?: string; lastGood?: number }>("GET", "/api/audit/verify"),
   tamper: (seq: number) => call<{ intact: boolean; seq?: number; kind?: string; lastGood?: number }>("POST", "/api/audit/tamper-check", { seq }),
+  bases: () => call<{ bases: BaseSummary[]; canCreate: boolean }>("GET", "/api/bases"),
+  createBase: (name: string, description = "") => call<{ id: string }>("POST", "/api/bases", { name, description }),
+  updateBase: (id: string, patch: { name?: string; description?: string }) => call<{ updated: boolean }>("PATCH", `/api/bases/${id}`, patch),
+  deleteBase: (id: string) => call<{ deleted: boolean }>("DELETE", `/api/bases/${id}`),
+  createTable: (base: string, name: string, primary: string, description = "") => call<TableInfo>("POST", "/api/tables", { base, name, primary, description }),
+  updateTable: (id: string, patch: { name?: string; description?: string }) => call<TableInfo>("PATCH", `/api/tables/${id}`, patch),
+  deleteTable: (id: string) => call<{ deleted: boolean }>("DELETE", `/api/tables/${id}`),
+  updateField: (table: string, field: string, patch: FieldPatch) => call<TableInfo>("PATCH", `/api/tables/${table}/fields/${field}`, patch),
+  deleteField: (table: string, field: string) => call<TableInfo>("DELETE", `/api/tables/${table}/fields/${field}`),
+  createRefset: (code: string, name: string, tree: boolean) => call<{ id: string }>("POST", "/api/refdata", { code, name, tree }),
+  addItem: (set: string, code: string, name: string, parent?: string) => call<{ id: string }>("POST", `/api/refdata/${set}/items`, { code, name, parent: parent || undefined }),
+  setItemEnabled: (set: string, item: string, enabled: boolean) => call<{ updated: boolean }>("PATCH", `/api/refdata/${set}/items/${item}`, { enabled }),
+  createPerson: (name: string, kind: string, title: string, members: string[] = []) => call<{ id: string }>("POST", "/api/people", { name, kind, title, members }),
+  updatePerson: (id: string, patch: { name?: string; title?: string; members?: string[] }) => call<{ updated: boolean }>("PATCH", `/api/people/${id}`, patch),
+  settings: () => call<Setting[]>("GET", "/api/settings"),
+  setSetting: (key: string, type: string, text: string) => call<{ updated: boolean }>("PUT", `/api/settings/${encodeURIComponent(key)}`, { type, text }),
+  templates: () => call<Template[]>("GET", "/api/templates"),
+  installTemplate: (key: string) => call<{ installed: string }>("POST", `/api/templates/${key}/install`),
   transition: (table: string, record: string, key: string) => call<RecordDetail>("POST", `/api/tables/${table}/records/${record}/transitions/${key}`),
   act: (run: number, task: number, act: Act) => call<RecordDetail>("POST", `/api/approvals/${run}/tasks/${task}`, act),
   tasks: () => call<MyTask[]>("GET", "/api/tasks"),

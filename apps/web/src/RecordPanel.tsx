@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError, CellInput, Column, Explanation, Option, RecordDetail, TableInfo, Value } from "./api";
 import { CellView, ExplainList } from "./TablePage";
 import { ProcessSection } from "./Process";
@@ -147,11 +147,18 @@ export default function RecordPanel({
   const [saving, setSaving] = useState(false);
   const [approval, setApproval] = useState(false);
 
+  // The record just created: the panel switches to it and keeps saying "Saved.".
+  const justCreated = useRef<string | null>(null);
+
   useEffect(() => {
     setDraft({});
     setErrors({});
-    setMessage(null);
     setApproval(false);
+    if (recordId && recordId === justCreated.current) {
+      justCreated.current = null;
+      return;
+    }
+    setMessage(null);
     if (recordId) api.record(tableId, recordId).then(setRecord).catch((e: ApiError) => setMessage(e.message));
     else setRecord(null);
   }, [tableId, recordId]);
@@ -168,6 +175,7 @@ export default function RecordPanel({
       setDraft({});
       setRecord(saved);
       setMessage("Saved.");
+      if (creating) justCreated.current = saved.id;
       onSaved(saved.id);
     } catch (e) {
       const error = e as ApiError;

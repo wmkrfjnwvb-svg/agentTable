@@ -20,7 +20,7 @@
 //! who do it, so the audit log tells the story from the first second.
 
 use crate::error::{ApiError, ApiResult};
-use crate::model::{CellInput, Data, LinkPair, Person, Table, Workspace, BASE, WORKSPACE};
+use crate::model::{Base, CellInput, Data, LinkPair, Person, Table, Workspace, BASE, WORKSPACE};
 use mt_core::condition::{Condition, Operator};
 use mt_core::decimal::Decimal;
 use mt_core::field::{
@@ -309,6 +309,7 @@ fn suppliers_table() -> Table {
     requests.options = OptionsSource::Table { table: REQUESTS };
     Table {
         id: SUPPLIERS,
+        base: BASE,
         name: "Suppliers".to_owned(),
         description: "Companies we buy from".to_owned(),
         primary: supplier::NAME,
@@ -368,6 +369,7 @@ fn requests_table() -> ApiResult<Table> {
     changed_by.system = Some(SystemField::ModifiedBy);
     Ok(Table {
         id: REQUESTS,
+        base: BASE,
         name: "Purchase requests".to_owned(),
         description: "What we want to buy, from whom, and why".to_owned(),
         primary: request::TITLE,
@@ -410,6 +412,7 @@ fn lines_table() -> ApiResult<Table> {
     price.validation.currencies = vec![usd()?];
     Ok(Table {
         id: LINES,
+        base: BASE,
         name: "Request lines".to_owned(),
         description: "What each request contains".to_owned(),
         primary: line::ITEM,
@@ -476,27 +479,9 @@ fn policy(ws: &mut Workspace, now: Timestamp) -> ApiResult<()> {
     let policy: &mut Policy = &mut ws.data.policy;
     policy
         .add_set(set(
-            1,
-            "Workspace administration",
-            keys(&[
-                "access.manage",
-                "schema.manage",
-                "view.manage",
-                "members.manage",
-                "settings.manage",
-                "refdata.manage",
-                "audit.read",
-                "data.confidential",
-                "data.personal",
-                "data.unmask",
-                "record.read",
-                "record.create",
-                "record.update",
-                "record.delete",
-                "supplier.bank.view",
-                "supplier.bank.edit",
-                "order.place",
-            ])?,
+            4,
+            "Purchasing administration",
+            keys(&["supplier.bank.view", "supplier.bank.edit", "order.place"])?,
         ))
         .map_err(perm)?;
     policy
@@ -546,14 +531,7 @@ fn policy(ws: &mut Workspace, now: Timestamp) -> ApiResult<()> {
         ))
     };
     let grants = vec![
-        grant(
-            1,
-            ALICE,
-            set_grant(1),
-            Resource::Tenant,
-            "Administers the workspace",
-            now,
-        ),
+        grant(21, ALICE, set_grant(4), base, "Administers purchasing", now),
         grant(
             2,
             TEAM,
@@ -1059,49 +1037,132 @@ fn approve_as(
     .map(|_| ())
 }
 
-/// Builds the demo workspace.
+/// An empty workspace: the built-in reference sets and one administrator who may do
+/// everything. Users build their bases from here, or install a template.
 ///
 /// # Errors
-/// Only if the demo definitions are inconsistent (a bug).
-pub fn demo(now: Timestamp) -> ApiResult<Workspace> {
+/// Only if the built-in definitions are inconsistent (a bug).
+pub fn empty() -> ApiResult<Workspace> {
     let data = Data {
-        tables: vec![suppliers_table(), requests_table()?, lines_table()?],
+        bases: Vec::new(),
+        tables: Vec::new(),
         refsets: vec![
-            cost_centres(),
             mt_refdata::builtin::countries(),
             mt_refdata::builtin::currencies(),
         ],
-        people: people(),
+        people: people().into_iter().filter(|p| p.id == ALICE).collect(),
         policy: Policy::new(),
-        params: BTreeMap::from([
-            ("tax.rate".to_owned(), Value::Percent(Decimal::new(8, 2))),
-            ("approval.cfo_limit".to_owned(), money(25_000)?),
-        ]),
+        params: BTreeMap::new(),
         counters: BTreeMap::new(),
         next_id: 0,
         audit: Vec::new(),
         process: crate::process::Process::default(),
-        links: vec![
-            LinkPair {
-                table: REQUESTS,
-                field: request::LINES,
-                inverse_table: LINES,
-                inverse_field: line::REQUEST,
-            },
-            LinkPair {
-                table: REQUESTS,
-                field: request::SUPPLIER,
-                inverse_table: SUPPLIERS,
-                inverse_field: supplier::REQUESTS,
-            },
-        ],
+        links: Vec::new(),
     };
     let mut ws = Workspace::new(data)?;
-    formulas(&mut ws)?;
-    policy(&mut ws, now)?;
-    process(&mut ws)?;
-    records(&mut ws, now)?;
+    let perm = |e: mt_perm::PermError| ApiError::internal(e.to_string());
+    ws.data
+        .policy
+        .add_set(CapabilitySet {
+            id: mt_core::id::CapabilitySetId::from_u128(1),
+            name: "Workspace administration".to_owned(),
+            description: Some("Everything, everywhere".to_owned()),
+            capabilities: Action::ALL.iter().map(|a| Capability::from(*a)).collect(),
+        })
+        .map_err(perm)?;
+    let admin = grant(
+        1,
+        ALICE,
+        Granted::Set(mt_core::id::CapabilitySetId::from_u128(1)),
+        Resource::Tenant,
+        "Administers the workspace",
+        Timestamp::EPOCH,
+    );
+    ws.data
+        .policy
+        .give(admin, &DirectoryOf(&ws.data.people))
+        .map_err(perm)?;
     Ok(ws)
+}
+
+/// The purchasing sample installed on an empty workspace (tests, `--demo`).
+///
+/// # Errors
+/// Only if the demo definitions are inconsistent (a bug).
+pub fn demo(now: Timestamp) -> ApiResult<Workspace> {
+    let mut ws = empty()?;
+    install_purchasing(&mut ws, Actor::direct(ALICE), now)?;
+    Ok(ws)
+}
+
+/// The templates that can be installed.
+#[must_use]
+pub fn templates() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![(
+        "purchasing",
+        "Purchasing (sample)",
+        "Suppliers, purchase requests with lines, cost centres, formulas, approvals routed by \
+         limits, a CFO step, and seven people with different access",
+    )]
+}
+
+/// Installs the purchasing sample as its own base: tables, cost centres, people, access,
+/// the request lifecycle and approval, and records taken through the process.
+///
+/// # Errors
+/// 409 when it is installed already.
+pub fn install_purchasing(ws: &mut Workspace, actor: Actor, now: Timestamp) -> ApiResult<()> {
+    if ws.data.bases.iter().any(|b| b.id == BASE) {
+        return Err(ApiError::conflict(
+            "the purchasing sample is installed already",
+        ));
+    }
+    ws.data.bases.push(Base {
+        id: BASE,
+        name: "Purchasing".to_owned(),
+        description: "Suppliers, purchase requests and their approval (sample)".to_owned(),
+    });
+    ws.audit_object(
+        actor,
+        "template.install",
+        mt_audit::ObjectRef::new("base", BASE.to_string()),
+        serde_json::json!({"template": "purchasing", "base": "Purchasing"}),
+        now,
+    )?;
+    ws.data
+        .tables
+        .extend([suppliers_table(), requests_table()?, lines_table()?]);
+    ws.data.refsets.push(cost_centres());
+    ws.rebuild_refdata()?;
+    for person in people() {
+        if ws.person(person.id).is_none() {
+            ws.data.people.push(person);
+        }
+    }
+    ws.data.params.extend([
+        ("tax.rate".to_owned(), Value::Percent(Decimal::new(8, 2))),
+        ("approval.cfo_limit".to_owned(), money(25_000)?),
+    ]);
+    ws.data.links.extend([
+        LinkPair {
+            table: REQUESTS,
+            field: request::LINES,
+            inverse_table: LINES,
+            inverse_field: line::REQUEST,
+        },
+        LinkPair {
+            table: REQUESTS,
+            field: request::SUPPLIER,
+            inverse_table: SUPPLIERS,
+            inverse_field: supplier::REQUESTS,
+        },
+    ]);
+    ws.rebuild_graph()?;
+    formulas(ws)?;
+    policy(ws, now)?;
+    process(ws)?;
+    records(ws, now)?;
+    Ok(())
 }
 
 fn country(code: &str) -> Value {

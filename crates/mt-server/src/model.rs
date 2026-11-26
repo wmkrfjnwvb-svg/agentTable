@@ -29,10 +29,37 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The demo workspace.
+/// The workspace (one per installation until tenants arrive with `mt-identity`).
 pub const WORKSPACE: WorkspaceId = WorkspaceId::from_u128(1);
-/// The demo base.
+/// The base of the purchasing sample (and of tables saved before bases existed).
 pub const BASE: BaseId = BaseId::from_u128(1);
+
+const fn default_base() -> BaseId {
+    BASE
+}
+
+/// A base: a set of tables, with their processes and access, that belong together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Base {
+    /// Stable id.
+    pub id: BaseId,
+    /// Display name.
+    pub name: String,
+    /// What the base is for.
+    #[serde(default)]
+    pub description: String,
+}
+
+impl Base {
+    /// The resource the base is for the access policy.
+    #[must_use]
+    pub const fn resource(&self) -> Resource {
+        Resource::Base {
+            workspace: WORKSPACE,
+            base: self.id,
+        }
+    }
+}
 
 /// A principal: a person, guest, agent or group.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +114,9 @@ impl RecordFacts for Record {
 pub struct Table {
     /// Stable id.
     pub id: TableId,
+    /// The base it belongs to.
+    #[serde(default = "default_base")]
+    pub base: BaseId,
     /// Display name.
     pub name: String,
     /// What the table holds.
@@ -108,7 +138,7 @@ impl Table {
     pub const fn resource(&self) -> Resource {
         Resource::Table {
             workspace: WORKSPACE,
-            base: BASE,
+            base: self.base,
             table: self.id,
         }
     }
@@ -150,6 +180,9 @@ pub struct LinkPair {
 /// Everything that is saved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Data {
+    /// Bases.
+    #[serde(default)]
+    pub bases: Vec<Base>,
     /// Tables.
     pub tables: Vec<Table>,
     /// Reference sets (definitions, items, overlays).
@@ -226,13 +259,48 @@ impl Workspace {
             graph: Graph::default(),
             log,
         };
+        workspace.ensure_bases();
         workspace.rebuild_refdata()?;
         workspace.rebuild_graph()?;
         Ok(workspace)
     }
 
+    /// Data saved before bases existed: its tables belong to the purchasing base.
+    fn ensure_bases(&mut self) {
+        let missing: BTreeSet<BaseId> = self
+            .data
+            .tables
+            .iter()
+            .map(|t| t.base)
+            .filter(|id| !self.data.bases.iter().any(|b| b.id == *id))
+            .collect();
+        for id in missing {
+            self.data.bases.push(Base {
+                id,
+                name: if id == BASE {
+                    "Purchasing".to_owned()
+                } else {
+                    "Base".to_owned()
+                },
+                description: String::new(),
+            });
+        }
+    }
+
+    /// A base.
+    ///
+    /// # Errors
+    /// 404 for an unknown base.
+    pub fn base(&self, id: BaseId) -> ApiResult<&Base> {
+        self.data
+            .bases
+            .iter()
+            .find(|b| b.id == id)
+            .ok_or_else(|| ApiError::not_found(format!("base {id}")))
+    }
+
     /// Rebuilds the reference-data catalogue from the saved sets.
-    fn rebuild_refdata(&mut self) -> ApiResult<()> {
+    pub(crate) fn rebuild_refdata(&mut self) -> ApiResult<()> {
         let mut catalogue = RefData::new();
         for state in &self.data.refsets {
             catalogue
@@ -376,6 +444,19 @@ impl Workspace {
     pub fn new_field_id(&mut self, now: Timestamp) -> ApiResult<FieldId> {
         let (ms, random) = self.fresh(now);
         FieldId::new(ms, random).map_err(internal)
+    }
+
+    /// A new id of any kind (`TableId::new`, `BaseId::new` …).
+    ///
+    /// # Errors
+    /// When the clock is outside the id range.
+    pub fn new_id<T>(
+        &mut self,
+        now: Timestamp,
+        make: impl Fn(u64, [u8; 10]) -> Result<T, mt_core::CoreError>,
+    ) -> ApiResult<T> {
+        let (ms, random) = self.fresh(now);
+        make(ms, random).map_err(internal)
     }
 
     // ---------------------------------------------------------------- access
@@ -1087,6 +1168,25 @@ impl Workspace {
         details: serde_json::Value,
         now: Timestamp,
     ) -> ApiResult<()> {
+        let object = match record {
+            Some(record) => ObjectRef::new("record", record.to_string()),
+            None => ObjectRef::new("table", table.to_string()),
+        };
+        self.audit_object(actor, action, object, details, now)
+    }
+
+    /// Appends an entry about any object (a base, a person, a code list) to the audit chain.
+    ///
+    /// # Errors
+    /// When the entry cannot be prepared.
+    pub fn audit_object(
+        &mut self,
+        actor: Actor,
+        action: &str,
+        object: ObjectRef,
+        details: serde_json::Value,
+        now: Timestamp,
+    ) -> ApiResult<()> {
         let principal = |id: PrincipalId| {
             let kind = match self.person(id).map(|p| p.kind) {
                 Some(PrincipalKind::Agent) => mt_audit::PrincipalKind::AiAgent,
@@ -1095,10 +1195,6 @@ impl Workspace {
                 | None => mt_audit::PrincipalKind::User,
             };
             mt_audit::Principal::new(kind, id.to_string())
-        };
-        let object = match record {
-            Some(record) => ObjectRef::new("record", record.to_string()),
-            None => ObjectRef::new("table", table.to_string()),
         };
         let mut draft =
             AuditDraft::direct(principal(actor.principal), action, object, now.millis())

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError, Cell, Column, QueryResult, Row } from "./api";
 import RecordPanel from "./RecordPanel";
 import FieldPicker from "./FieldPicker";
+import { FieldEditor } from "./Build";
 
 type Filter = { field: string; op: string; text: string; me: boolean };
 
@@ -44,7 +45,7 @@ export function CellView({ column, cell }: { column: Column; cell?: Cell }) {
   if (column.dataType === "link") {
     return (
       <span className="chips">
-        {cell.d.split(", ").map((t, i) => (
+        {(cell.items ?? [cell.d]).map((t, i) => (
           <span className="chip" key={i}>{t}</span>
         ))}
       </span>
@@ -77,6 +78,7 @@ export default function TablePage({ tableId, onChanged }: { tableId: string; onC
   const [open, setOpen] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [editing, setEditing] = useState<Column | null>(null);
 
   const load = useCallback(() => {
     const spec = {
@@ -147,7 +149,7 @@ export default function TablePage({ tableId, onChanged }: { tableId: string; onC
       <div className="page-head">
         <div>
           <h1 data-testid="table-title">{table.name}</h1>
-          <p className="muted">{table.description} · <span data-testid="row-count">{result.count}</span> record(s) you can see</p>
+          <p className="muted">{table.description ? `${table.description} · ` : ""}<span data-testid="row-count">{result.count}</span> record(s) you can see</p>
         </div>
         <div className="actions">
           {table.canManageSchema && (
@@ -239,7 +241,12 @@ export default function TablePage({ tableId, onChanged }: { tableId: string; onC
           <thead>
             <tr>
               {columns.map((c) => (
-                <th key={c.id} className={c.numeric ? "num" : ""}>
+                <th
+                  key={c.id}
+                  className={`${c.numeric ? "num" : ""} ${table.canManageSchema ? "editable-head" : ""}`}
+                  onClick={table.canManageSchema ? () => setEditing(c) : undefined}
+                  data-testid={`head-${c.name}`}
+                >
                   <ColumnHeader column={c} />
                 </th>
               ))}
@@ -277,7 +284,8 @@ export default function TablePage({ tableId, onChanged }: { tableId: string; onC
           onDeleted={() => { setOpen(null); load(); onChanged(); }}
         />
       )}
-      {picking && <FieldPicker tableId={tableId} onClose={() => setPicking(false)} onCreated={() => { setPicking(false); load(); }} />}
+      {picking && <FieldPicker tableId={tableId} onClose={() => setPicking(false)} onCreated={() => { setPicking(false); load(); onChanged(); }} />}
+      {editing && <FieldEditor tableId={tableId} column={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); onChanged(); }} />}
     </div>
   );
 }

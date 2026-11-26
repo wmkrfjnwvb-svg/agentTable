@@ -12,6 +12,7 @@
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{context, set_cell, Record, Table, Workspace};
+use mt_core::condition::{Condition, Operand, Operator};
 use mt_core::id::{FieldId, PrincipalId, RecordId, RefItemId, TableId};
 use mt_core::state::StateCategory;
 use mt_core::time::Timestamp;
@@ -20,7 +21,7 @@ use mt_lifecycle::approval::{
     Act, Approval, ApprovalDef, Approver, Env, Event, Join, Mode, Node, Output, People, Status,
     TaskKind, TaskStatus,
 };
-use mt_lifecycle::lifecycle::{Blocker, Lifecycle, Move};
+use mt_lifecycle::lifecycle::{Blocker, Lifecycle, Move, Transition};
 use mt_lifecycle::LifecycleError;
 use mt_perm::{Action, Actor, Capability, PrincipalKind};
 use serde::{Deserialize, Serialize};
@@ -409,15 +410,89 @@ fn record_of(ws: &Workspace, table: TableId, record: RecordId) -> ApiResult<(&Ta
     Ok((table, record))
 }
 
-fn blocker_text(binding: &Binding, table: &Table, blocker: &Blocker) -> String {
+/// A condition in words, with the table's field names: `“Total” > 0.00 USD`.
+#[must_use]
+pub fn condition_text(ws: &Workspace, table: &Table, condition: &Condition) -> String {
+    match condition {
+        Condition::All(parts) if parts.is_empty() => "always".to_owned(),
+        Condition::Any(parts) if parts.is_empty() => "never".to_owned(),
+        Condition::All(parts) => parts
+            .iter()
+            .map(|p| condition_text(ws, table, p))
+            .collect::<Vec<_>>()
+            .join(" and "),
+        Condition::Any(parts) => format!(
+            "({})",
+            parts
+                .iter()
+                .map(|p| condition_text(ws, table, p))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        ),
+        Condition::Not(inner) => format!("not ({})", condition_text(ws, table, inner)),
+        Condition::Test(test) => {
+            let field = table.field(test.field);
+            let name = field.map_or_else(|| test.field.to_string(), |f| f.name.clone());
+            let show = |value: &Value| {
+                field.map_or_else(
+                    || format!("{value:?}"),
+                    |f| crate::view::display(ws, f, value),
+                )
+            };
+            let operand = match &test.operand {
+                Operand::None => String::new(),
+                Operand::Value(value) => show(value),
+                Operand::List(values) => values.iter().map(show).collect::<Vec<_>>().join(", "),
+                Operand::Range(low, high) => format!("{} and {}", show(low), show(high)),
+                Operand::Field(other) => format!("“{}”", field_name(table, *other)),
+                Operand::Me => "me".to_owned(),
+                Operand::Period(period) => format!("{period:?}").to_lowercase(),
+            };
+            let op = match test.op {
+                Operator::IsEmpty => "is empty",
+                Operator::IsNotEmpty => "is filled in",
+                Operator::Eq => "is",
+                Operator::Ne => "is not",
+                Operator::Lt => "<",
+                Operator::Le => "≤",
+                Operator::Gt => ">",
+                Operator::Ge => "≥",
+                Operator::Between => "is between",
+                Operator::Contains => "contains",
+                Operator::NotContains => "does not contain",
+                Operator::StartsWith => "starts with",
+                Operator::EndsWith => "ends with",
+                Operator::In => "is one of",
+                Operator::NotIn => "is none of",
+                Operator::HasAny => "has any of",
+                Operator::HasAll => "has all of",
+                Operator::HasNone => "has none of",
+            };
+            if operand.is_empty() {
+                format!("“{name}” {op}")
+            } else {
+                format!("“{name}” {op} {operand}")
+            }
+        }
+    }
+}
+
+fn blocker_text(
+    ws: &Workspace,
+    binding: &Binding,
+    table: &Table,
+    transition: &Transition,
+    blocker: &Blocker,
+) -> String {
     match blocker {
         Blocker::WrongState { current } => {
             format!("not possible while {}", state_name(binding, current))
         }
         Blocker::Capability { capability } => format!("needs “{capability}”"),
-        Blocker::Guard => {
-            "the record does not meet this step's condition (a total above zero)".to_owned()
-        }
+        Blocker::Guard => transition.guard.as_ref().map_or_else(
+            || "the record does not meet this step's condition".to_owned(),
+            |guard| format!("needs {}", condition_text(ws, table, guard)),
+        ),
         Blocker::Required { field } => format!("“{}” is required", field_name(table, *field)),
     }
 }
@@ -520,7 +595,7 @@ pub fn transition(
         .map_err(|blockers| {
             let reasons: Vec<String> = blockers
                 .iter()
-                .map(|b| blocker_text(binding, table, b))
+                .map(|b| blocker_text(ws, binding, table, transition, b))
                 .collect();
             ApiError {
                 details: json!(reasons),
@@ -1073,7 +1148,7 @@ pub fn record_json(
             let mut reasons: Vec<String> = offer
                 .blockers
                 .iter()
-                .map(|b| blocker_text(binding, table, b))
+                .map(|b| blocker_text(ws, binding, table, transition, b))
                 .collect();
             if !decision.allowed {
                 reasons.push(match &transition.capability {
@@ -1153,6 +1228,50 @@ pub fn frozen(
     Some((binding.field, frozen, state_name(binding, &state)))
 }
 
+/// The amount that sums up a record for an approver: the last computed money field (a
+/// total), else the first money field.
+#[must_use]
+pub fn headline_amount(table: &Table) -> Option<&mt_core::field::FieldDef> {
+    let money = |f: &&mt_core::field::FieldDef| f.data_type == mt_core::field::DataType::Money;
+    table
+        .fields
+        .iter()
+        .rev()
+        .filter(money)
+        .find(|f| f.is_computed())
+        .or_else(|| table.fields.iter().find(money))
+}
+
+/// The capabilities an approval of the table asks its approvers to hold.
+#[must_use]
+pub fn approval_capabilities(ws: &Workspace, table: TableId) -> Vec<String> {
+    let Some(binding) = binding(ws, table) else {
+        return Vec::new();
+    };
+    let mut keys = Vec::new();
+    for transition in &binding.lifecycle.transitions {
+        let Some(def) = transition
+            .approval
+            .as_ref()
+            .and_then(|k| definition(ws, k, None).ok())
+        else {
+            continue;
+        };
+        for node in def.nodes() {
+            if let Node::Approval { approvers, .. } = node {
+                for approver in approvers {
+                    if let Approver::Capability { capability } = approver {
+                        if !keys.contains(capability) {
+                            keys.push(capability.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    keys
+}
+
 /// The viewer's open tasks.
 #[must_use]
 pub fn tasks_json(ws: &Workspace, actor: Actor) -> Json {
@@ -1165,7 +1284,7 @@ pub fn tasks_json(ws: &Workspace, actor: Actor) -> Json {
         for task in run.approval.tasks_of(actor.principal) {
             let table = ws.table(run.table).ok();
             let total = table.and_then(|t| {
-                let field = t.fields.iter().find(|f| f.name == "Total")?;
+                let field = headline_amount(t)?;
                 let value = t.record(run.record)?.cells.get(&field.id)?;
                 Some(crate::view::display(ws, field, value))
             });

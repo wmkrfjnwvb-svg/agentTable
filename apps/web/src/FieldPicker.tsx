@@ -37,6 +37,12 @@ export default function FieldPicker({ tableId, onClose, onCreated }: { tableId: 
   const [formula, setFormula] = useState("");
   const [pattern, setPattern] = useState("{seq:4}");
   const [format, setFormat] = useState("tax.de_vat");
+  const [required, setRequired] = useState(false);
+  const [help, setHelp] = useState("");
+  const [single, setSingle] = useState(false);
+  const [inverseName, setInverseName] = useState("");
+  const [currency, setCurrency] = useState("USD");
+  const [role, setRole] = useState("");
   const [check, setCheck] = useState<Check | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tables, setTables] = useState<TableSummary[]>([]);
@@ -85,6 +91,12 @@ export default function FieldPicker({ tableId, onClose, onCreated }: { tableId: 
         formula: formula || undefined,
         pattern,
         format,
+        required,
+        help: help || undefined,
+        single,
+        inverseName: inverseName || undefined,
+        currency: chosen.key === "currency" ? currency : undefined,
+        role: chosen.key === "person" ? role : undefined,
       });
       onCreated();
     } catch (e) {
@@ -142,11 +154,39 @@ export default function FieldPicker({ tableId, onClose, onCreated }: { tableId: 
                   </label>
                 )}
                 {chosen.requirements.includes("link_target") && (
+                  <>
+                    <label>
+                      Links to
+                      <select value={target} onChange={(e) => setTarget(e.target.value)} data-testid="field-target">
+                        <option value="">Choose a table…</option>
+                        {tables.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="inline">
+                      <input type="checkbox" checked={single} onChange={(e) => setSingle(e.target.checked)} data-testid="field-single" /> At most one linked record
+                    </label>
+                    <label>
+                      Also show the link in the other table as (two-way)
+                      <input value={inverseName} onChange={(e) => setInverseName(e.target.value)} placeholder="e.g. Lines — leave empty for one-way" data-testid="field-inverse" />
+                    </label>
+                  </>
+                )}
+                {chosen.key === "currency" && (
                   <label>
-                    Links to
-                    <select value={target} onChange={(e) => setTarget(e.target.value)} data-testid="field-target">
-                      <option value="">Choose a table…</option>
-                      {tables.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    Currency
+                    <select value={currency} onChange={(e) => setCurrency(e.target.value)} data-testid="field-currency">
+                      {["USD", "EUR", "JPY", "KRW", "INR", "GBP", "CNY"].map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </label>
+                )}
+                {chosen.key === "person" && (
+                  <label>
+                    Role
+                    <select value={role} onChange={(e) => setRole(e.target.value)} data-testid="field-role">
+                      <option value="">— (just a person)</option>
+                      <option value="requester">Requester (filled with whoever creates the record; owns it)</option>
+                      <option value="owner">Owner</option>
+                      <option value="assignee">Assignee</option>
                     </select>
                   </label>
                 )}
@@ -154,7 +194,7 @@ export default function FieldPicker({ tableId, onClose, onCreated }: { tableId: 
                   <label>
                     Values from
                     <select value={refset} onChange={(e) => setRefset(e.target.value)} data-testid="field-refset">
-                      <option value="">Choose a reference set…</option>
+                      <option value="">Choose a code list…</option>
                       {sets.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </select>
                   </label>
@@ -162,7 +202,7 @@ export default function FieldPicker({ tableId, onClose, onCreated }: { tableId: 
                 {chosen.requirements.includes("numbering") && (
                   <label>
                     Pattern
-                    <input value={pattern} onChange={(e) => setPattern(e.target.value)} placeholder="INV-{YYYY}-{seq:5}" />
+                    <input value={pattern} onChange={(e) => setPattern(e.target.value)} placeholder="INV-{YYYY}-{seq:5}" data-testid="field-pattern" />
                   </label>
                 )}
                 {chosen.requirements.includes("format") && (
@@ -212,6 +252,15 @@ export default function FieldPicker({ tableId, onClose, onCreated }: { tableId: 
                     )}
                   </div>
                 )}
+                {!needsFormula && chosen.key !== "auto_number" && (
+                  <label className="inline">
+                    <input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} data-testid="field-required" /> Required
+                  </label>
+                )}
+                <label>
+                  Help text
+                  <input value={help} onChange={(e) => setHelp(e.target.value)} placeholder="optional" data-testid="field-help" />
+                </label>
                 {error && <div className="notice refused" data-testid="field-error">{error}</div>}
                 <div className="panel-actions">
                   <button disabled={!ready} onClick={create} data-testid="create-field">Create field</button>

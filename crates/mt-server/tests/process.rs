@@ -453,7 +453,7 @@ async fn invalid_transitions_are_refused_with_every_reason() {
     assert_eq!(
         submit["reasons"],
         json!([
-            "the record does not meet this step's condition (a total above zero)",
+            "needs “Total” > 0.00 USD",
             "“Supplier” is required",
             "“Lines” is required",
         ])
@@ -791,9 +791,19 @@ async fn std_approvals_survive_a_restart() {
     let dir = std::env::temp_dir().join(format!("agenttable-process-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("data.json");
-    let app = mt_server::open(Some(file.clone()), Clock::Fixed(now())).unwrap();
+    let app = mt_server::open(
+        Some(file.clone()),
+        Clock::Fixed(now()),
+        mt_server::Start::Demo,
+    )
+    .unwrap();
     go(&app, BOB, "Office chairs", "submit").await;
-    let reopened = mt_server::open(Some(file.clone()), Clock::Fixed(now())).unwrap();
+    let reopened = mt_server::open(
+        Some(file.clone()),
+        Clock::Fixed(now()),
+        mt_server::Start::Demo,
+    )
+    .unwrap();
     assert_eq!(
         task_titles(&reopened, CAROL).await,
         ["Laptops for new hires", "Office chairs"]

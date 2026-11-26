@@ -11,7 +11,7 @@ use crate::seed::ALICE;
 use crate::view;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use mt_core::condition::{Condition, Operand, Operator};
 use mt_core::field::{Classification, DataType, FieldDef, OptionsSource};
@@ -124,9 +124,25 @@ fn actor(ws: &Workspace, headers: &HeaderMap) -> ApiResult<Actor> {
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/status", get(status))
-        .route("/api/people", get(people))
-        .route("/api/tables", get(tables))
-        .route("/api/tables/{table}", get(table))
+        .route("/api/people", get(people).post(create_person))
+        .route("/api/tables", get(tables).post(create_table))
+        .route(
+            "/api/tables/{table}",
+            get(table).patch(update_table).delete(delete_table),
+        )
+        .route("/api/bases", get(bases).post(create_base))
+        .route("/api/bases/{base}", patch(update_base).delete(delete_base))
+        .route(
+            "/api/tables/{table}/fields/{field}",
+            patch(update_field).delete(delete_field),
+        )
+        .route("/api/refdata/{set}/items", post(add_item))
+        .route("/api/refdata/{set}/items/{item}", patch(update_item))
+        .route("/api/people/{person}", patch(update_person))
+        .route("/api/settings", get(settings))
+        .route("/api/settings/{key}", put(set_setting))
+        .route("/api/templates", get(templates))
+        .route("/api/templates/{key}/install", post(install_template))
         .route("/api/tables/{table}/query", post(query))
         .route("/api/tables/{table}/records", post(create))
         .route(
@@ -137,7 +153,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/tables/{table}/fields/{field}/options", get(options))
         .route("/api/tables/{table}/formula", post(check_formula))
         .route("/api/field-types", get(field_types))
-        .route("/api/refdata", get(refsets))
+        .route("/api/refdata", get(refsets).post(create_refset))
         .route("/api/refdata/{set}", get(refset))
         .route("/api/capabilities", get(capabilities))
         .route("/api/explain", get(explain))
@@ -217,7 +233,7 @@ async fn tables(State(app): State<Shared>, headers: HeaderMap) -> Reply {
             let can_read = ws
                 .decide(actor, &Action::RecordRead.into(), t.resource(), None, &[], now)
                 .allowed;
-            json!({"id": t.id, "name": t.name, "description": t.description, "records": readable, "canRead": can_read})
+            json!({"id": t.id, "base": t.base, "name": t.name, "description": t.description, "records": readable, "canRead": can_read})
         })
         .collect();
     Ok(Json(json!(list)))
@@ -283,6 +299,7 @@ fn table_json(ws: &Workspace, actor: Actor, table: &Table, now: Timestamp) -> Js
     };
     json!({
         "id": table.id,
+        "base": table.base,
         "name": table.name,
         "description": table.description,
         "primary": table.primary,
@@ -677,8 +694,8 @@ fn record_json(
     let mut actions = serde_json::Map::new();
     actions.insert("update".to_owned(), check(Action::RecordUpdate.into()));
     actions.insert("delete".to_owned(), check(Action::RecordDelete.into()));
-    if table.id == crate::seed::REQUESTS {
-        if let Ok(approve) = Capability::custom("request.approve") {
+    if let Some(key) = crate::process::approval_capabilities(ws, table.id).first() {
+        if let Ok(approve) = Capability::custom(key) {
             actions.insert("approve".to_owned(), check(approve));
         }
     }
@@ -1025,6 +1042,25 @@ struct FieldSpec {
     pattern: Option<String>,
     #[serde(default)]
     format: Option<String>,
+    #[serde(default)]
+    required: bool,
+    #[serde(default)]
+    help: Option<String>,
+    /// Person fields: `requester`, `owner`, `assignee`.
+    #[serde(default)]
+    role: Option<String>,
+    /// Money fields: the currency (ISO code).
+    #[serde(default)]
+    currency: Option<String>,
+    /// Links: at most one linked record.
+    #[serde(default)]
+    single: bool,
+    /// Links: the name of the mirror field in the target table (two-way link).
+    #[serde(default, rename = "inverseName")]
+    inverse_name: Option<String>,
+    /// Links: the mirror holds at most one record.
+    #[serde(default, rename = "inverseSingle")]
+    inverse_single: bool,
 }
 
 fn not_yet(builtin: BuiltinType) -> Option<&'static str> {
@@ -1221,12 +1257,476 @@ async fn add_field(
             }
         }
     }
-    let id = ws.add_field(actor, table_id, field, now)?;
+    field.validation.required = spec.required && !field.is_generated();
+    field.help_text = spec
+        .help
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(str::to_owned);
+    if field.data_type == DataType::Principal {
+        if let Some(role) = &spec.role {
+            field.role = crate::builder::person_role(role)?;
+        }
+    }
+    if field.data_type == DataType::Money {
+        if let Some(code) = spec.currency.as_deref().filter(|c| !c.is_empty()) {
+            let currency = mt_core::money::Currency::new(code)
+                .map_err(|e| ApiError::invalid(e.to_string(), JsonValue::Null))?;
+            field.validation.currencies = vec![currency];
+        }
+    }
+    let id = match field.options {
+        OptionsSource::Table { table: target } => {
+            if spec.single {
+                field.validation.max_items = Some(1);
+            }
+            let inverse = spec
+                .inverse_name
+                .as_deref()
+                .filter(|n| !n.trim().is_empty())
+                .map(|n| (n, spec.inverse_single));
+            crate::builder::add_link(&mut ws, actor, table_id, field, target, inverse, now)?
+        }
+        OptionsSource::None
+        | OptionsSource::Inline { .. }
+        | OptionsSource::RefSet { .. }
+        | OptionsSource::Parameter { .. } => ws.add_field(actor, table_id, field, now)?,
+    };
     app.save(&ws)?;
     let table = ws.table(table_id)?;
     Ok(Json(
         json!({"field": id, "table": table_json(&ws, actor, table, now)}),
     ))
+}
+
+// ------------------------------------------------------------------- building
+
+#[derive(Debug, Deserialize)]
+struct NameBody {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+async fn bases(State(app): State<Shared>, headers: HeaderMap) -> Reply {
+    let ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let now = app.clock.now();
+    let list: Vec<JsonValue> = ws
+        .data
+        .bases
+        .iter()
+        .map(|b| {
+            let tables: Vec<JsonValue> = ws
+                .data
+                .tables
+                .iter()
+                .filter(|t| t.base == b.id)
+                .map(|t| {
+                    let can_read = ws
+                        .decide(actor, &Action::RecordRead.into(), t.resource(), None, &[], now)
+                        .allowed;
+                    json!({"id": t.id, "name": t.name, "records": ws.readable(actor, t, now).len(), "canRead": can_read})
+                })
+                .collect();
+            let manage = ws
+                .decide(actor, &Action::SchemaManage.into(), b.resource(), None, &[], now)
+                .allowed;
+            json!({"id": b.id, "name": b.name, "description": b.description, "tables": tables, "canManageSchema": manage})
+        })
+        .collect();
+    let can_create = ws
+        .decide(
+            actor,
+            &Action::SchemaManage.into(),
+            Resource::Tenant,
+            None,
+            &[],
+            now,
+        )
+        .allowed;
+    Ok(Json(json!({"bases": list, "canCreate": can_create})))
+}
+
+async fn create_base(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<NameBody>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let id = crate::builder::create_base(
+        &mut ws,
+        actor,
+        body.name.as_deref().unwrap_or_default(),
+        body.description.as_deref().unwrap_or_default(),
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"id": id})))
+}
+
+async fn update_base(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(base): Path<String>,
+    Json(body): Json<NameBody>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    crate::builder::update_base(
+        &mut ws,
+        actor,
+        parse(&base, "base")?,
+        body.name.as_deref(),
+        body.description.as_deref(),
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"updated": true})))
+}
+
+async fn delete_base(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(base): Path<String>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    crate::builder::delete_base(&mut ws, actor, parse(&base, "base")?, app.clock.now())?;
+    app.save(&ws)?;
+    Ok(Json(json!({"deleted": true})))
+}
+
+#[derive(Debug, Deserialize)]
+struct NewTable {
+    base: mt_core::id::BaseId,
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    primary: String,
+}
+
+async fn create_table(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<NewTable>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let now = app.clock.now();
+    let id = crate::builder::create_table(
+        &mut ws,
+        actor,
+        body.base,
+        &body.name,
+        &body.description,
+        &body.primary,
+        now,
+    )?;
+    app.save(&ws)?;
+    let table = ws.table(id)?;
+    Ok(Json(table_json(&ws, actor, table, now)))
+}
+
+async fn update_table(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+    Json(body): Json<NameBody>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let now = app.clock.now();
+    let id: TableId = parse(&table, "table")?;
+    crate::builder::update_table(
+        &mut ws,
+        actor,
+        id,
+        body.name.as_deref(),
+        body.description.as_deref(),
+        now,
+    )?;
+    app.save(&ws)?;
+    let table = ws.table(id)?;
+    Ok(Json(table_json(&ws, actor, table, now)))
+}
+
+async fn delete_table(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    crate::builder::delete_table(&mut ws, actor, parse(&table, "table")?, app.clock.now())?;
+    app.save(&ws)?;
+    Ok(Json(json!({"deleted": true})))
+}
+
+async fn update_field(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path((table, field)): Path<(String, String)>,
+    Json(body): Json<crate::builder::FieldPatch>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let now = app.clock.now();
+    let table_id: TableId = parse(&table, "table")?;
+    crate::builder::update_field(
+        &mut ws,
+        actor,
+        table_id,
+        parse(&field, "field")?,
+        &body,
+        now,
+    )?;
+    app.save(&ws)?;
+    let table = ws.table(table_id)?;
+    Ok(Json(table_json(&ws, actor, table, now)))
+}
+
+async fn delete_field(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path((table, field)): Path<(String, String)>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let now = app.clock.now();
+    let table_id: TableId = parse(&table, "table")?;
+    crate::builder::delete_field(&mut ws, actor, table_id, parse(&field, "field")?, now)?;
+    app.save(&ws)?;
+    let table = ws.table(table_id)?;
+    Ok(Json(table_json(&ws, actor, table, now)))
+}
+
+#[derive(Debug, Deserialize)]
+struct NewRefSet {
+    code: String,
+    name: String,
+    #[serde(default)]
+    tree: bool,
+}
+
+async fn create_refset(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<NewRefSet>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let id = crate::builder::create_refset(
+        &mut ws,
+        actor,
+        &body.code,
+        &body.name,
+        body.tree,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"id": id})))
+}
+
+#[derive(Debug, Deserialize)]
+struct NewItem {
+    code: String,
+    name: String,
+    #[serde(default)]
+    parent: Option<mt_core::id::RefItemId>,
+}
+
+async fn add_item(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(set): Path<String>,
+    Json(body): Json<NewItem>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let id = crate::builder::add_item(
+        &mut ws,
+        actor,
+        parse(&set, "reference set")?,
+        &body.code,
+        &body.name,
+        body.parent,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"id": id})))
+}
+
+#[derive(Debug, Deserialize)]
+struct ItemPatchBody {
+    enabled: bool,
+}
+
+async fn update_item(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path((set, item)): Path<(String, String)>,
+    Json(body): Json<ItemPatchBody>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    crate::builder::set_item_enabled(
+        &mut ws,
+        actor,
+        parse(&set, "reference set")?,
+        parse(&item, "item")?,
+        body.enabled,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"updated": true})))
+}
+
+#[derive(Debug, Deserialize)]
+struct NewPerson {
+    name: String,
+    kind: PrincipalKind,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    members: Vec<PrincipalId>,
+}
+
+async fn create_person(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Json(body): Json<NewPerson>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let id = crate::builder::create_person(
+        &mut ws,
+        actor,
+        &body.name,
+        body.kind,
+        &body.title,
+        &body.members,
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"id": id})))
+}
+
+#[derive(Debug, Deserialize)]
+struct PersonPatch {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    members: Option<Vec<PrincipalId>>,
+}
+
+async fn update_person(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(person): Path<String>,
+    Json(body): Json<PersonPatch>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    crate::builder::update_person(
+        &mut ws,
+        actor,
+        parse(&person, "principal")?,
+        body.name.as_deref(),
+        body.title.as_deref(),
+        body.members.as_deref(),
+        app.clock.now(),
+    )?;
+    app.save(&ws)?;
+    Ok(Json(json!({"updated": true})))
+}
+
+async fn settings(State(app): State<Shared>) -> Json<JsonValue> {
+    let ws = app.ws.lock().await;
+    let list: Vec<JsonValue> = ws
+        .data
+        .params
+        .iter()
+        .map(|(key, value)| {
+            let kind = match value {
+                Value::Money(_) => "money",
+                Value::Percent(_) => "percent",
+                Value::Number(_) => "number",
+                Value::Bool(_) => "bool",
+                Value::Null
+                | Value::Text(_)
+                | Value::LongText(_)
+                | Value::Date(_)
+                | Value::DateTime(_)
+                | Value::Duration(_)
+                | Value::Reference(_)
+                | Value::MultiReference(_)
+                | Value::Link(_)
+                | Value::Principal(_)
+                | Value::Attachment(_)
+                | Value::Json(_) => "text",
+            };
+            let shown = value.data_type().map_or_else(String::new, |data_type| {
+                view::display(
+                    &ws,
+                    &FieldDef::new(FieldId::from_u128(1), key, data_type),
+                    value,
+                )
+            });
+            json!({"key": key, "type": kind, "value": shown})
+        })
+        .collect();
+    Json(json!(list))
+}
+
+#[derive(Debug, Deserialize)]
+struct SettingBody {
+    #[serde(rename = "type")]
+    kind: String,
+    text: String,
+}
+
+async fn set_setting(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+    Json(body): Json<SettingBody>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    let value = crate::builder::param_value(&body.kind, &body.text)?;
+    crate::builder::set_param(&mut ws, actor, &key, value, app.clock.now())?;
+    app.save(&ws)?;
+    Ok(Json(json!({"updated": true})))
+}
+
+async fn templates(State(app): State<Shared>) -> Json<JsonValue> {
+    let ws = app.ws.lock().await;
+    let list: Vec<JsonValue> = crate::seed::templates()
+        .into_iter()
+        .map(|(key, name, description)| {
+            json!({"key": key, "name": name, "description": description, "installed": crate::builder::installed(&ws, key)})
+        })
+        .collect();
+    Json(json!(list))
+}
+
+async fn install_template(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    crate::builder::install_template(&mut ws, actor, &key, app.clock.now())?;
+    app.save(&ws)?;
+    Ok(Json(json!({"installed": key})))
 }
 
 // ------------------------------------------------------------------- reference data

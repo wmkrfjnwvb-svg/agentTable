@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod builder;
 pub mod error;
 pub mod formula;
 pub mod model;
@@ -27,11 +28,24 @@ pub fn router(app: Arc<App>) -> Router {
     api::routes().fallback(web::serve).with_state(app)
 }
 
-/// Loads the workspace from `data_file`, or creates the demo workspace (and saves it there).
+/// What a new workspace starts with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    /// One administrator, no bases: build your own, or install a template.
+    Empty,
+    /// The purchasing sample installed.
+    Demo,
+}
+
+/// Loads the workspace from `data_file`, or creates a new one as `start` says.
 ///
 /// # Errors
-/// When the file exists but cannot be read, or the demo cannot be built.
-pub fn open(data_file: Option<PathBuf>, clock: Clock) -> Result<Arc<App>, error::ApiError> {
+/// When the file exists but cannot be read, or the new workspace cannot be built.
+pub fn open(
+    data_file: Option<PathBuf>,
+    clock: Clock,
+    start: Start,
+) -> Result<Arc<App>, error::ApiError> {
     let now = clock.now();
     let existing = data_file.as_ref().filter(|path| path.exists());
     let ws = match existing {
@@ -44,7 +58,10 @@ pub fn open(data_file: Option<PathBuf>, clock: Clock) -> Result<Arc<App>, error:
             ws.recompute(now);
             ws
         }
-        None => seed::demo(now)?,
+        None => match start {
+            Start::Empty => seed::empty()?,
+            Start::Demo => seed::demo(now)?,
+        },
     };
     let app = Arc::new(App {
         ws: tokio::sync::Mutex::new(ws),

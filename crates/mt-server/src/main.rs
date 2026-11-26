@@ -1,11 +1,12 @@
 //! `agenttable` — starts the server.
 //!
 //! ```text
-//! agenttable [--port 8080] [--host 127.0.0.1] [--data agenttable-data.json] [--fresh] [--open]
+//! agenttable [--port 8080] [--host 127.0.0.1] [--data agenttable-data.json] [--fresh] [--demo] [--open]
 //! ```
 //!
-//! The data file is created with the demo workspace on first start. `--fresh` starts over
-//! with the demo data; `--open` opens the web app in the default browser.
+//! The data file is created on first start: an empty workspace with one administrator, or
+//! with `--demo` the purchasing sample. `--fresh` starts over; `--open` opens the web app in
+//! the default browser.
 
 use mt_server::api::Clock;
 use std::net::SocketAddr;
@@ -16,6 +17,7 @@ struct Options {
     port: u16,
     data: PathBuf,
     fresh: bool,
+    demo: bool,
     open: bool,
 }
 
@@ -25,6 +27,7 @@ fn options() -> Result<Options, String> {
         port: 8080,
         data: PathBuf::from("agenttable-data.json"),
         fresh: false,
+        demo: false,
         open: false,
     };
     let mut args = std::env::args().skip(1);
@@ -39,9 +42,10 @@ fn options() -> Result<Options, String> {
             "--host" => options.host = args.next().ok_or("--host needs an address")?,
             "--data" => options.data = PathBuf::from(args.next().ok_or("--data needs a file")?),
             "--fresh" => options.fresh = true,
+            "--demo" => options.demo = true,
             "--open" => options.open = true,
             "--help" | "-h" => {
-                return Err("usage: agenttable [--port 8080] [--host 127.0.0.1] [--data agenttable-data.json] [--fresh] [--open]".to_owned());
+                return Err("usage: agenttable [--port 8080] [--host 127.0.0.1] [--data agenttable-data.json] [--fresh] [--demo] [--open]".to_owned());
             }
             other => return Err(format!("unknown option `{other}` (try --help)")),
         }
@@ -83,7 +87,15 @@ async fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     }
-    let app = match mt_server::open(Some(options.data.clone()), Clock::System) {
+    let app = match mt_server::open(
+        Some(options.data.clone()),
+        Clock::System,
+        if options.demo {
+            mt_server::Start::Demo
+        } else {
+            mt_server::Start::Empty
+        },
+    ) {
         Ok(app) => app,
         Err(error) => {
             eprintln!("cannot open the workspace: {error}");

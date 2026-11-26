@@ -49,6 +49,8 @@ test.describe.serial("agenttable end to end", () => {
   });
 
   test("the overview shows the tables and what is built", async () => {
+    await expect(page.getByTestId("base-cards")).toContainText("Purchasing");
+    await page.getByTestId("nav-status").click();
     await expect(page.getByTestId("overview")).toBeVisible();
     await expect(page.getByTestId("components")).toContainText("mt-formula");
     await expect(page.getByTestId("components")).toContainText("placeholder");

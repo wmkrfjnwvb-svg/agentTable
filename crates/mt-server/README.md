@@ -27,7 +27,9 @@ cargo run --release -p mt-server -- --open      # http://127.0.0.1:8080
 ```
 
 Options: `--port`, `--host`, `--data <file>` (default `agenttable-data.json`), `--fresh` (start
-over with the demo), `--open` (open the browser). Debug builds read `apps/web/dist` from disk.
+over), `--demo` (a new workspace starts with the purchasing sample), `--open` (open the
+browser). A new workspace is otherwise empty: one administrator, the built-in ISO code lists,
+and the template gallery. Debug builds read `apps/web/dist` from disk.
 
 ## Modules
 
@@ -35,6 +37,7 @@ over with the demo), `--open` (open the browser). Debug builds read `apps/web/di
 |---|---|
 | `model` | The workspace: tables, records, reference sets, people, policy, audit; create/update/delete and add-field operations, each checked, validated, recomputed and audited |
 | `seed` | The demo: suppliers, purchase requests, request lines; seven people with different access; the request lifecycle and purchase approval; records created, submitted and approved through the real operations |
+| `builder` | Building a configuration: bases, tables, field editing and deletion (refused while formulas, lifecycles, approvals or access rules use the field), two-way links, code lists and items, settings for `PARAM`, people and groups, templates |
 | `process` | Lifecycles bound to tables, transitions, approvals (start, act, finish → state), approvers from the access policy, locks on frozen records and their lines, notices, and the views of tasks, approvals and the process design |
 | `formula` | How formulas see tables, records, linked records and the environment |
 | `view` | Values as people read them; field descriptions; decisions explained |
@@ -55,11 +58,17 @@ over with the demo), `--open` (open the browser). Debug builds read `apps/web/di
 ## Tests
 
 `tests/api.rs` — 19 in-process API tests (every endpoint, as different people).
+`tests/builder.rs` — 7 tests that build the expense configuration of doc 14 (S3) from an empty
+workspace (base, tree code list, two tables, a two-way link, a roll-up, a formula reading a
+setting, people and groups), edit and delete safely, install the template, survive a restart,
+and refuse every malformed or unauthorised building block.
 `tests/process.rs` — 9 tests of lifecycles and approvals through the API: the seeded requests'
 history, submit → approve → order, the CFO step and sending back, rejection, revision,
 withdrawal, cancellation and deletion rules, every refused transition with its reasons, acts
 that are not allowed (someone else's task, an agent acting for the approver, unknown tasks,
 missing reasons), a request nobody may approve (stuck, admins told), locks on lines of frozen
 requests, and approvals surviving a restart.
-The browser walk-through in `apps/web/e2e` (Playwright, 21 steps with screenshots) runs against
-the release package in CI. Line coverage of this crate: 92 % from the API tests alone.
+The browser walk-throughs in `apps/web/e2e` (Playwright, with screenshots) run against the
+release package in CI: `build.spec.ts` builds the expense configuration from an empty workspace
+(14 steps); `product.spec.ts` works with the purchasing sample (21 steps).
+Line coverage of this crate: see the coverage job (gate: 90 % from the API tests alone).

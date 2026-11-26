@@ -127,7 +127,14 @@ pub fn cell(
     let value = record.cells.get(&field.id).cloned().unwrap_or(Value::Null);
     let text = display(ws, field, &value);
     match permission.visibility {
-        Visibility::Visible => json!({"d": text, "v": value}),
+        Visibility::Visible => match (&value, &field.options) {
+            // Each linked record's title on its own: a title may contain commas.
+            (Value::Link(ids), OptionsSource::Table { table }) => {
+                let items: Vec<String> = ids.iter().map(|id| ws.title(*table, *id)).collect();
+                json!({"d": text, "v": value, "items": items})
+            }
+            _ => json!({"d": text, "v": value}),
+        },
         Visibility::Masked => {
             let masked = field
                 .format
@@ -184,6 +191,10 @@ pub fn field(
         "linkTarget": target,
         "fieldGroup": table.group_of(field.id).map(|g| g.name.clone()),
         "help": field.help_text,
+        "options": field.inline_options().map(|options| options
+            .iter()
+            .map(|o| json!({"id": o.id, "label": o.label, "enabled": o.enabled}))
+            .collect::<Vec<_>>()),
         "maxItems": field.validation.max_items,
         "visibility": permission.map(|p| match p.visibility {
             Visibility::Visible => "visible",

@@ -131,23 +131,65 @@ export function RefDataPage() {
   const [chosen, setChosen] = useState("");
   const [query, setQuery] = useState("");
   const [set, setSet] = useState<Awaited<ReturnType<typeof api.refset>> | null>(null);
-  useEffect(() => {
+  const [newCode, setNewCode] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newTree, setNewTree] = useState(false);
+  const [itemCode, setItemCode] = useState("");
+  const [itemName, setItemName] = useState("");
+  const [itemParent, setItemParent] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const loadSets = (select?: string) =>
     api.refsets().then((list) => {
       setSets(list);
-      if (list[0]) setChosen(list[0].id);
+      if (select) setChosen(select);
+      else if (!chosen && list[0]) setChosen(list[0].id);
     });
+  const loadSet = () => chosen && api.refset(chosen, query).then(setSet);
+  useEffect(() => {
+    loadSets();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
     if (!chosen) return;
     const timer = window.setTimeout(() => api.refset(chosen, query).then(setSet), query ? 150 : 0);
     return () => window.clearTimeout(timer);
   }, [chosen, query]);
+  const summary = sets.find((s) => s.id === chosen);
+  const attempt = async (work: () => Promise<unknown>) => {
+    setMessage(null);
+    try {
+      await work();
+    } catch (e) {
+      setMessage((e as { message: string }).message);
+    }
+  };
+  const createSet = () =>
+    attempt(async () => {
+      const { id } = await api.createRefset(newCode, newName, newTree);
+      setNewCode("");
+      setNewName("");
+      setNewTree(false);
+      await loadSets(id);
+    });
+  const addItem = () =>
+    attempt(async () => {
+      await api.addItem(chosen, itemCode, itemName, itemParent);
+      setItemCode("");
+      setItemName("");
+      await loadSet();
+      await loadSets();
+    });
+  const toggle = (item: string, enabled: boolean) =>
+    attempt(async () => {
+      await api.setItemEnabled(chosen, item, enabled);
+      await loadSet();
+    });
   return (
     <div className="page" data-testid="refdata">
       <div className="page-head">
         <div>
-          <h1>Reference data</h1>
-          <p className="muted">Governed code lists that fields draw their values from. Changes with four-eyes approval are in the engine (mt-refdata); their screens come next.</p>
+          <h1>Code lists</h1>
+          <p className="muted">Governed lists of values (flat or a tree) that fields draw from: categories, cost centres, regions. Records store the item, so renaming never touches them; disabled items stay on old records.</p>
         </div>
       </div>
       <div className="split">
@@ -158,6 +200,13 @@ export function RefDataPage() {
               <div className="muted small">{s.system ? "built in" : "this organisation"} · {s.tree ? "tree" : "list"} · {s.items} items</div>
             </button>
           ))}
+          <div className="card new-set">
+            <b>New code list</b>
+            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Name, e.g. Expense categories" data-testid="new-set-name" />
+            <input value={newCode} onChange={(e) => setNewCode(e.target.value)} placeholder="Code, e.g. expense_category" data-testid="new-set-code" />
+            <label className="inline"><input type="checkbox" checked={newTree} onChange={(e) => setNewTree(e.target.checked)} data-testid="new-set-tree" /> A tree (items under items)</label>
+            <button onClick={createSet} disabled={!newName.trim() || !newCode.trim()} data-testid="create-set">Create</button>
+          </div>
         </div>
         <div className="set-detail card">
           {set && (
@@ -166,19 +215,39 @@ export function RefDataPage() {
               {set.description && <p className="muted">{set.description}</p>}
               <input className="search" placeholder="Search items…" value={query} onChange={(e) => setQuery(e.target.value)} data-testid="refdata-search" />
               <table className="tree" data-testid="refdata-items">
-                <thead><tr><th>Item</th><th>Code</th><th>Path</th></tr></thead>
+                <thead><tr><th>Item</th><th>Code</th><th>Path</th>{!summary?.system && <th />}</tr></thead>
                 <tbody>
                   {set.items.map((item) => (
-                    <tr key={item.id}>
-                      <td style={{ paddingLeft: `${0.5 + (query ? 0 : (item.depth - 1) * 1.25)}rem` }}>{set.tree && !item.leaf ? "▾ " : "• "}{item.name}</td>
+                    <tr key={item.id} className={item.active ? "" : "inactive"}>
+                      <td style={{ paddingLeft: `${0.5 + (query ? 0 : (item.depth - 1) * 1.25)}rem` }}>{set.tree && !item.leaf ? "▾ " : "• "}{item.name}{!item.active && <span className="muted small"> (disabled)</span>}</td>
                       <td><code>{item.code}</code></td>
                       <td className="muted small">{item.path}</td>
+                      {!summary?.system && (
+                        <td>
+                          <button className="ghost small" onClick={() => toggle(item.id, !item.active)} data-testid={`toggle-${item.code}`}>{item.active ? "Disable" : "Enable"}</button>
+                        </td>
+                      )}
                     </tr>
                   ))}
+                  {set.items.length === 0 && <tr><td colSpan={4} className="muted">No items yet.</td></tr>}
                 </tbody>
               </table>
+              {!summary?.system && (
+                <div className="form-row">
+                  <input value={itemName} onChange={(e) => setItemName(e.target.value)} placeholder="Item name" data-testid="item-name" />
+                  <input value={itemCode} onChange={(e) => setItemCode(e.target.value)} placeholder="Code" data-testid="item-code" />
+                  {set.tree && (
+                    <select value={itemParent} onChange={(e) => setItemParent(e.target.value)} data-testid="item-parent">
+                      <option value="">(top level)</option>
+                      {set.items.map((i) => <option key={i.id} value={i.id}>{i.path}</option>)}
+                    </select>
+                  )}
+                  <button onClick={addItem} disabled={!itemName.trim() || !itemCode.trim()} data-testid="add-item">Add item</button>
+                </div>
+              )}
             </>
           )}
+          {message && <div className="notice refused" data-testid="refdata-message">{message}</div>}
         </div>
       </div>
     </div>

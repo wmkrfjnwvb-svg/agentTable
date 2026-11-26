@@ -31,7 +31,7 @@ pub fn now() -> Timestamp {
 }
 
 pub fn app() -> Arc<App> {
-    mt_server::open(None, Clock::Fixed(now())).unwrap()
+    mt_server::open(None, Clock::Fixed(now()), mt_server::Start::Demo).unwrap()
 }
 
 pub async fn call(

@@ -672,7 +672,7 @@ async fn invalid_changes_are_refused_with_reasons() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     // Nothing of this reached the audit log.
     let (_, entries) = call(&app, Method::GET, "/api/audit", None, None).await;
-    assert_eq!(entries.as_array().unwrap().len(), 32);
+    assert_eq!(entries.as_array().unwrap().len(), 33);
 }
 
 #[tokio::test]
@@ -1238,8 +1238,12 @@ async fn std_the_audit_chain() {
     }
     let (_, entries) = call(&app, Method::GET, "/api/audit", Some(DAVE), None).await;
     let entries = entries.as_array().unwrap();
-    assert_eq!(entries.len(), 32);
-    assert_eq!(entries[0]["seq"], 32, "newest first");
+    assert_eq!(entries.len(), 33);
+    assert_eq!(entries[0]["seq"], 33, "newest first");
+    assert_eq!(
+        entries[32]["action"], "template.install",
+        "the sample was installed first"
+    );
     assert_eq!(entries[0]["action"], "record.transition");
     assert_eq!(entries[0]["actor"], "Dave Finance");
     assert_eq!(entries[0]["details"]["to"], "Ordered");
@@ -1248,7 +1252,7 @@ async fn std_the_audit_chain() {
     assert_eq!(entries[31]["prev"].as_str().unwrap().len(), 64);
     let (_, verdict) = call(&app, Method::GET, "/api/audit/verify", Some(DAVE), None).await;
     assert_eq!(verdict["intact"], true);
-    assert_eq!(verdict["entries"], 32);
+    assert_eq!(verdict["entries"], 33);
     let (_, tampered) = call(
         &app,
         Method::POST,
@@ -1287,7 +1291,7 @@ async fn std_the_audit_chain() {
     assert_eq!(entries[0]["initiator"], "Bob Buyer");
     assert_eq!(entries[0]["details"]["changes"][0]["from"], "6");
     let (_, verdict) = call(&app, Method::GET, "/api/audit/verify", None, None).await;
-    assert_eq!(verdict["entries"], 33);
+    assert_eq!(verdict["entries"], 34);
 }
 
 #[tokio::test]
@@ -1296,7 +1300,12 @@ async fn std_the_workspace_is_saved_and_reopened() {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("data.json");
     let _ = std::fs::remove_file(&file);
-    let app = mt_server::open(Some(file.clone()), Clock::Fixed(now())).unwrap();
+    let app = mt_server::open(
+        Some(file.clone()),
+        Clock::Fixed(now()),
+        mt_server::Start::Demo,
+    )
+    .unwrap();
     assert!(!file.exists(), "nothing is written before the first change");
     let (_, lines) = query(&app, ALICE, LINES, json!({})).await;
     let chair = record_id(&lines, "Ergonomic chair");
@@ -1310,17 +1319,27 @@ async fn std_the_workspace_is_saved_and_reopened() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(file.exists());
-    let reopened = mt_server::open(Some(file.clone()), Clock::Fixed(now())).unwrap();
+    let reopened = mt_server::open(
+        Some(file.clone()),
+        Clock::Fixed(now()),
+        mt_server::Start::Demo,
+    )
+    .unwrap();
     let (_, requests) = query(&reopened, ALICE, REQUESTS, json!({})).await;
     assert_eq!(
         cell(&requests, "Office chairs", request::TOTAL),
         "2,764.80 USD"
     );
     let (_, verdict) = call(&reopened, Method::GET, "/api/audit/verify", None, None).await;
-    assert_eq!(verdict["entries"], 33);
+    assert_eq!(verdict["entries"], 34);
     // A damaged file is reported, not ignored.
     std::fs::write(&file, b"{ not json").unwrap();
-    assert!(mt_server::open(Some(file.clone()), Clock::Fixed(now())).is_err());
+    assert!(mt_server::open(
+        Some(file.clone()),
+        Clock::Fixed(now()),
+        mt_server::Start::Demo
+    )
+    .is_err());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
