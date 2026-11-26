@@ -60,7 +60,7 @@ export function Timeline({ run }: { run: ApprovalRun }) {
                 <span className="task-status">{t.status}</span>
               </div>
               {t.comment && <div className="small comment">“{t.comment}”</div>}
-              <div className="muted small">{t.actedAt ? `decided ${when(t.actedAt)}` : `asked ${when(t.openedAt)}`}</div>
+              <div className="muted small">{t.actedAt ? `decided ${when(t.actedAt)}` : `asked ${when(t.openedAt)}${t.dueAt ? ` · due ${when(t.dueAt)}` : ""}`}</div>
             </div>
           </li>
         ))}
@@ -75,6 +75,45 @@ export function Timeline({ run }: { run: ApprovalRun }) {
           ))}
         </ul>
       </details>
+    </div>
+  );
+}
+
+/// A fill-in task: the step's fields, then Submit.
+export function FillInBox({ run, task, fields, onDone }: { run: number; task: number; fields: { id: string; name: string; dataType: string }[]; onDone: (r: RecordDetail) => void }) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const filled = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, { text: v }]));
+      onDone(await api.act(run, task, { act: "submit" }, filled));
+    } catch (e) {
+      setMessage((e as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="fill-in-form" data-testid="fill-in-box">
+      {fields.map((f) => (
+        <label key={f.id}>
+          {f.name}
+          <input
+            type={f.dataType === "date" ? "date" : "text"}
+            value={values[f.id] ?? ""}
+            onChange={(e) => setValues({ ...values, [f.id]: e.target.value })}
+            placeholder={f.dataType === "money" ? "e.g. 120.00 USD" : ""}
+            data-testid={`fill-${f.name}`}
+          />
+        </label>
+      ))}
+      <div className="row">
+        <button onClick={submit} disabled={busy} data-testid="task-submit">Submit</button>
+      </div>
+      {message && <div className="notice refused small" data-testid="task-message">{message}</div>}
     </div>
   );
 }
@@ -192,7 +231,11 @@ export function ProcessSection({ tableId, record, onChanged }: { tableId: string
       {mine && process.approval && (
         <div className="your-turn">
           <div className="small"><b>Your decision</b> · {mine.step}</div>
-          <DecisionBox run={process.approval.id} task={mine.id} canSendBack={mine.canSendBack} onDone={onChanged} />
+          {mine.kind === "fill_in" ? (
+            <FillInBox run={process.approval.id} task={mine.id} fields={mine.fields} onDone={onChanged} />
+          ) : (
+            <DecisionBox run={process.approval.id} task={mine.id} canSendBack={mine.canSendBack} onDone={onChanged} />
+          )}
         </div>
       )}
       {process.approval && <Timeline run={process.approval} />}
@@ -345,6 +388,8 @@ function TaskList({ onCount }: { onCount: (n: number) => void }) {
               {t.delegatedFrom ? ` · handed over by ${t.delegatedFrom}` : ""}
             </div>
             {t.total && <div className="task-total">{t.total}</div>}
+            {t.kind === "fill_in" && <div className="small">fill in: {t.fields.map((f) => f.name).join(", ")}</div>}
+            {t.dueAt && <div className={`small ${t.dueAt < Date.now() ? "bad" : "muted"}`}>due {when(t.dueAt)}</div>}
           </button>
         ))}
         {done && <div className="notice ok" data-testid="task-done">{done}</div>}
@@ -368,6 +413,18 @@ function TaskList({ onCount }: { onCount: (n: number) => void }) {
                   </div>
                 ))}
             </dl>
+            {selected.kind === "fill_in" ? (
+              <FillInBox
+                run={selected.run}
+                task={selected.task}
+                fields={selected.fields}
+                onDone={(r) => {
+                  setDone(`“${r.title}”: ${r.process?.approval?.status === "running" ? "your part is done" : r.process?.state.name}`);
+                  setSelected(null);
+                  load();
+                }}
+              />
+            ) : (
             <DecisionBox
               run={selected.run}
               task={selected.task}
@@ -378,6 +435,7 @@ function TaskList({ onCount }: { onCount: (n: number) => void }) {
                 load();
               }}
             />
+            )}
             <Timeline run={record.process.approval} />
           </div>
         ) : (

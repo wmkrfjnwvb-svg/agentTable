@@ -70,6 +70,19 @@ type Shared = Arc<App>;
 type Reply = ApiResult<Json<JsonValue>>;
 
 impl App {
+    /// Escalates or reports overdue approval tasks (the server calls this every minute).
+    ///
+    /// # Errors
+    /// When the workspace cannot be saved.
+    pub async fn tick(&self) -> ApiResult<usize> {
+        let mut ws = self.ws.lock().await;
+        let changed = crate::process::tick_all(&mut ws, self.clock.now())?;
+        if changed > 0 {
+            self.save(&ws)?;
+        }
+        Ok(changed)
+    }
+
     /// Saves the workspace after a change.
     fn save(&self, ws: &Workspace) -> ApiResult<()> {
         let Some(path) = &self.data_file else {
@@ -179,6 +192,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/approvals", get(approvals))
         .route("/api/approvals/{run}/tasks/{task}", post(act))
         .route("/api/tasks", get(tasks))
+        .route("/api/process/tick", post(tick))
         .route("/api/inbox", get(inbox))
         .route("/api/process", get(process_definitions))
 }
@@ -748,15 +762,39 @@ async fn act(
     State(app): State<Shared>,
     headers: HeaderMap,
     Path((run, task)): Path<(u64, u32)>,
-    Json(body): Json<mt_lifecycle::approval::Act>,
+    Json(mut body): Json<JsonValue>,
 ) -> Reply {
+    // `{"act": "submit", "values": {field: input}}` for a fill-in task; other acts as usual.
+    let values: BTreeMap<FieldId, CellInput> =
+        match body.as_object_mut().and_then(|o| o.remove("values")) {
+            Some(values) => serde_json::from_value(values)
+                .map_err(|e| ApiError::bad_request(format!("values: {e}")))?,
+            None => BTreeMap::new(),
+        };
+    let act: mt_lifecycle::approval::Act =
+        serde_json::from_value(body).map_err(|e| ApiError::bad_request(e.to_string()))?;
     let mut ws = app.ws.lock().await;
     let actor = actor(&ws, &headers)?;
     let now = app.clock.now();
-    let (table_id, record_id) = crate::process::act(&mut ws, actor, run, task, body, now)?;
+    let (table_id, record_id) = crate::process::act(&mut ws, actor, run, task, act, &values, now)?;
     app.save(&ws)?;
     let table = ws.table(table_id)?;
     Ok(Json(record_json(&ws, actor, table, record_id, now)?))
+}
+
+async fn tick(State(app): State<Shared>, headers: HeaderMap) -> Reply {
+    {
+        let ws = app.ws.lock().await;
+        let actor = actor(&ws, &headers)?;
+        ws.require(
+            actor,
+            &Action::SettingsManage.into(),
+            Resource::Tenant,
+            None,
+            app.clock.now(),
+        )?;
+    }
+    Ok(Json(json!({"changed": app.tick().await?})))
 }
 
 async fn tasks(State(app): State<Shared>, headers: HeaderMap) -> Reply {

@@ -1628,3 +1628,266 @@ async fn std_a_withdrawn_right_no_longer_decides_open_tasks() {
     .await;
     assert_eq!(status, StatusCode::OK);
 }
+
+// ---- more step kinds: quorum, parallel branches, fill-in, timeouts ----
+
+fn app_at(file: &std::path::Path, millis: i64) -> Arc<App> {
+    mt_server::open(
+        Some(file.to_path_buf()),
+        Clock::Fixed(Timestamp::from_millis(millis).unwrap()),
+        mt_server::Start::Empty,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn std_quorum_parallel_fill_in_and_timeouts() {
+    let dir = std::env::temp_dir().join(format!("agenttable-steps-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("data.json");
+    let start = now().millis();
+    let app = app_at(&file, start);
+    let x = build(&app).await;
+    let p = people(&app).await;
+    let ola = id(
+        &app,
+        "/api/people",
+        json!({"name": "Ola Officer", "kind": "member"}),
+    )
+    .await;
+    let paid_on = field(&app, &x.claims, json!({"type": "date", "name": "Paid on"})).await;
+    for who in [&p.max, &p.fiona, &ola] {
+        grant(
+            &app,
+            json!({"to": who, "capability": "record.read", "on": {"kind": "base", "id": x.base}}),
+        )
+        .await;
+    }
+    let mut d = design(&x, &p);
+    d["approval"]["steps"] = json!([
+        {"kind": "parallel", "name": "Checks", "join": {"join": "all"}, "branches": [
+            [{"kind": "approval", "name": "Manager", "approvers": [{"kind": "person", "id": p.max}], "mode": {"mode": "any"}, "timeoutHours": 24, "escalateTo": {"kind": "person", "id": ola}}],
+            [{"kind": "approval", "name": "Board", "approvers": [{"kind": "person", "id": p.fiona}, {"kind": "person", "id": ola}, {"kind": "person", "id": p.mia}], "mode": {"mode": "quorum", "required": 2}}],
+        ]},
+        {"kind": "fill_in", "name": "Payment date", "assignee": {"kind": "person", "id": p.fiona}, "fields": [paid_on]},
+    ]);
+    let (status, body) = call(
+        &app,
+        Method::PUT,
+        &format!("/api/tables/{}/process", x.claims),
+        Some(ALICE),
+        Some(d),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, info) = call(
+        &app,
+        Method::GET,
+        &format!("/api/tables/{}/process", x.claims),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        info["design"]["approval"]["steps"][0]["branches"][1][0]["mode"]["required"], 2,
+        "the design round-trips"
+    );
+    // Alice's claim; both branches start at once.
+    let purpose = columns_id(&app, &x.claims, "Purpose").await;
+    let (_, claim) = post(
+        &app,
+        &format!("/api/tables/{}/records", x.claims),
+        json!({"cells": {&purpose: {"text": "Conference"}}}),
+    )
+    .await;
+    let claim_id = claim["id"].as_str().unwrap().to_owned();
+    let description = columns_id(&app, &x.lines, "Description").await;
+    post(&app, &format!("/api/tables/{}/records", x.lines), json!({"cells": {&description: {"text": "Ticket"}, &x.amount: {"text": "300"}, &x.claim_link: {"value": {"type": "link", "value": [claim_id]}}}})).await;
+    let (status, submitted) = post(
+        &app,
+        &format!(
+            "/api/tables/{}/records/{claim_id}/transitions/submit",
+            x.claims
+        ),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+    let open: Vec<&str> = submitted["process"]["approval"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["status"] == "open")
+        .map(|t| t["assignee"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        open,
+        ["Max Manager", "Fiona Finance", "Ola Officer", "Mia Miller"]
+    );
+    assert!(submitted["process"]["approval"]["tasks"][0]["dueAt"].is_number());
+    // The quorum: Fiona and Ola approve; Mia's vote is no longer needed.
+    for who in [&p.fiona, &ola] {
+        let (status, _) = call(
+            &app,
+            Method::POST,
+            &task(&app, who, "Conference").await,
+            Some(who),
+            Some(json!({"act": "approve"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (_, mia_tasks) = call(&app, Method::GET, "/api/tasks", Some(&p.mia), None).await;
+    assert!(
+        mia_tasks.as_array().unwrap().is_empty(),
+        "the quorum was reached"
+    );
+    // A day passes; the manager's task is escalated to Ola.
+    let ticked = app_at(&file, start + 23 * 3_600_000);
+    let (_, changed) = call(
+        &ticked,
+        Method::POST,
+        "/api/process/tick",
+        Some(ALICE),
+        None,
+    )
+    .await;
+    assert_eq!(changed["changed"], 0, "not overdue yet");
+    let later = app_at(&file, start + 25 * 3_600_000);
+    let (status, _) = call(
+        &later,
+        Method::POST,
+        "/api/process/tick",
+        Some(&p.mia),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "only administrators tick by hand"
+    );
+    let (_, changed) = call(&later, Method::POST, "/api/process/tick", Some(ALICE), None).await;
+    assert_eq!(changed["changed"], 1);
+    let (_, inbox) = call(&later, Method::GET, "/api/inbox", Some(&ola), None).await;
+    assert_eq!(
+        inbox[0]["text"],
+        "“Conference” is overdue and now yours (from Max Manager)"
+    );
+    let (_, max_tasks) = call(&later, Method::GET, "/api/tasks", Some(&p.max), None).await;
+    assert!(max_tasks.as_array().unwrap().is_empty());
+    let (status, _) = call(
+        &later,
+        Method::POST,
+        &task(&later, &ola, "Conference").await,
+        Some(&ola),
+        Some(json!({"act": "approve"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // Fill-in: Fiona (who may only read) enters the payment date while the claim is locked.
+    let fill = task(&later, &p.fiona, "Conference").await;
+    let (_, tasks) = call(&later, Method::GET, "/api/tasks", Some(&p.fiona), None).await;
+    assert_eq!(tasks[0]["kind"], "fill_in");
+    assert_eq!(tasks[0]["fields"][0]["name"], "Paid on");
+    let (status, body) = call(
+        &later,
+        Method::POST,
+        &fill,
+        Some(&p.fiona),
+        Some(json!({"act": "submit"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["message"], "fill in Paid on first");
+    let (status, body) = call(
+        &later,
+        Method::POST,
+        &fill,
+        Some(&p.fiona),
+        Some(json!({"act": "submit", "values": {&purpose: {"text": "Changed"}}})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "only the step's fields: {body}"
+    );
+    let (status, body) = call(
+        &later,
+        Method::POST,
+        &fill,
+        Some(&ola),
+        Some(json!({"act": "submit", "values": {&paid_on: {"text": "2026-12-01"}}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "not Ola's task: {body}");
+    let (status, done) = call(
+        &later,
+        Method::POST,
+        &fill,
+        Some(&p.fiona),
+        Some(json!({"act": "submit", "values": {&paid_on: {"text": "2026-12-01"}}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["process"]["state"]["name"], "Approved");
+    let paid = done["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "Paid on")
+        .unwrap();
+    assert_eq!(paid["cell"]["d"], "2026-12-01");
+    let (_, entries) = call(&later, Method::GET, "/api/audit", Some(ALICE), None).await;
+    assert!(entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["details"]["task"] == "Payment date"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn invalid_step_designs_are_refused() {
+    let app = empty();
+    let x = build(&app).await;
+    let p = people(&app).await;
+    let path = format!("/api/tables/{}/process", x.claims);
+    let approver = json!([{"kind": "person", "id": p.max}]);
+    for (what, steps) in [
+        (
+            "zero hours",
+            json!([{"kind": "approval", "name": "A", "approvers": approver, "mode": {"mode": "any"}, "timeoutHours": 0}]),
+        ),
+        (
+            "escalation without timeout",
+            json!([{"kind": "approval", "name": "A", "approvers": approver, "mode": {"mode": "any"}, "escalateTo": {"kind": "person", "id": p.fiona}}]),
+        ),
+        (
+            "quorum of nobody",
+            json!([{"kind": "approval", "name": "A", "approvers": approver, "mode": {"mode": "quorum", "required": 0}}]),
+        ),
+        (
+            "one branch",
+            json!([{"kind": "parallel", "name": "P", "join": {"join": "all"}, "branches": [[{"kind": "approval", "name": "A", "approvers": approver, "mode": {"mode": "any"}}]]}]),
+        ),
+        (
+            "fill in a computed field",
+            json!([{"kind": "fill_in", "name": "F", "assignee": {"kind": "person", "id": p.fiona}, "fields": [x.total]}]),
+        ),
+        (
+            "fill in nothing",
+            json!([{"kind": "fill_in", "name": "F", "assignee": {"kind": "person", "id": p.fiona}, "fields": []}]),
+        ),
+        (
+            "unnamed step",
+            json!([{"kind": "notify", "name": " ", "to": approver}]),
+        ),
+    ] {
+        let mut d = design(&x, &p);
+        d["approval"]["steps"] = steps;
+        let (status, body) = call(&app, Method::PUT, &path, Some(ALICE), Some(d)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{what}: {body}");
+    }
+}

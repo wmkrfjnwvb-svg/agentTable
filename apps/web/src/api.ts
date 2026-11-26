@@ -79,6 +79,8 @@ export type ApprovalTask = {
   delegatedFrom: string | null;
   mine: boolean;
   canSendBack: boolean;
+  fields: { id: string; name: string; dataType: string }[];
+  dueAt: number | null;
 };
 
 export type ApprovalRun = {
@@ -129,6 +131,8 @@ export type MyTask = {
   openedAt: number;
   delegatedFrom: string | null;
   canSendBack: boolean;
+  fields: { id: string; name: string; dataType: string }[];
+  dueAt: number | null;
 };
 
 export type RunSummary = {
@@ -297,7 +301,8 @@ export const api = {
   templates: () => call<Template[]>("GET", "/api/templates"),
   installTemplate: (key: string) => call<{ installed: string }>("POST", `/api/templates/${key}/install`),
   transition: (table: string, record: string, key: string) => call<RecordDetail>("POST", `/api/tables/${table}/records/${record}/transitions/${key}`),
-  act: (run: number, task: number, act: Act) => call<RecordDetail>("POST", `/api/approvals/${run}/tasks/${task}`, act),
+  act: (run: number, task: number, act: Act, values?: Record<string, CellInput>) =>
+    call<RecordDetail>("POST", `/api/approvals/${run}/tasks/${task}`, values ? { ...act, values } : act),
   tasks: () => call<MyTask[]>("GET", "/api/tasks"),
   approvals: () => call<RunSummary[]>("GET", "/api/approvals"),
   inbox: () => call<Notice[]>("GET", "/api/inbox"),

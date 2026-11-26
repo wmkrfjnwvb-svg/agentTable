@@ -9,7 +9,84 @@ type Approver = { kind: "person"; id: string } | { kind: "field"; field: string 
 export type When = { field: string; op: string; text: string };
 type StateRow = { uid: string; key: string; name: string; category: string; required: string[]; locked: boolean; editable: string[] };
 type ButtonRow = { uid: string; key: string; name: string; from: string[]; to: string; capability: string; when: When | null };
-type StepRow = { uid: string; kind: "approval" | "notify"; name: string; approvers: Approver[]; mode: string; canSendBack: boolean; when: When | null };
+type StepKind = "approval" | "notify" | "fill_in" | "parallel";
+type StepRow = {
+  uid: string;
+  kind: StepKind;
+  name: string;
+  approvers: Approver[];
+  mode: string;
+  required: number;
+  canSendBack: boolean;
+  timeoutHours: string;
+  escalateTo: Approver | null;
+  fields: string[];
+  branches: StepRow[][];
+  join: string;
+  count: number;
+  when: When | null;
+};
+// The server's format (doc: crates/mt-server/src/design.rs).
+type StepDesign = {
+  kind: StepKind;
+  name: string;
+  approvers?: Approver[];
+  to?: Approver[];
+  assignee?: Approver;
+  fields?: string[];
+  mode?: { mode: string; required?: number };
+  canSendBack?: boolean;
+  timeoutHours?: number;
+  escalateTo?: Approver;
+  branches?: StepDesign[][];
+  join?: { join: string; count?: number };
+  when: When | null;
+};
+
+function blankStep(kind: StepKind = "approval"): StepRow {
+  return { uid: uid(), kind, name: "", approvers: [], mode: "any", required: 2, canSendBack: true, timeoutHours: "", escalateTo: null, fields: [], branches: kind === "parallel" ? [[], []] : [], join: "all", count: 1, when: null };
+}
+
+function fromDesign(s: StepDesign): StepRow {
+  const row = blankStep(s.kind);
+  return {
+    ...row,
+    name: s.name,
+    approvers: s.approvers ?? s.to ?? (s.assignee ? [s.assignee] : []),
+    mode: s.mode?.mode ?? "any",
+    required: s.mode?.required ?? 2,
+    canSendBack: s.canSendBack ?? false,
+    timeoutHours: s.timeoutHours ? String(s.timeoutHours) : "",
+    escalateTo: s.escalateTo ?? null,
+    fields: s.fields ?? [],
+    branches: (s.branches ?? []).map((b) => b.map(fromDesign)),
+    join: s.join?.join ?? "all",
+    count: s.join?.count ?? 1,
+    when: s.when,
+  };
+}
+
+function toDesign(s: StepRow): StepDesign {
+  const base = { name: s.name, when: s.when };
+  switch (s.kind) {
+    case "approval":
+      return {
+        kind: "approval",
+        ...base,
+        approvers: s.approvers,
+        mode: s.mode === "quorum" ? { mode: "quorum", required: s.required } : { mode: s.mode },
+        canSendBack: s.canSendBack,
+        timeoutHours: s.timeoutHours ? Number(s.timeoutHours) : undefined,
+        escalateTo: s.timeoutHours && s.escalateTo ? s.escalateTo : undefined,
+      };
+    case "notify":
+      return { kind: "notify", ...base, to: s.approvers };
+    case "fill_in":
+      return { kind: "fill_in", ...base, assignee: s.approvers[0], fields: s.fields };
+    case "parallel":
+      return { kind: "parallel", ...base, branches: s.branches.map((b) => b.map(toDesign)), join: s.join === "at_least" ? { join: "at_least", count: s.count } : { join: s.join } };
+  }
+}
 export type FieldInfo = { id: string; name: string; dataType: string; type: string; generated: boolean; options: { id: string; label: string }[] | null };
 
 type Design = {
@@ -23,7 +100,7 @@ type Design = {
     approved: string;
     rejected: string;
     returned: string;
-    steps: ({ kind: "approval"; name: string; approvers: Approver[]; mode: { mode: string }; canSendBack: boolean; when: When | null } | { kind: "notify"; name: string; to: Approver[]; when: When | null })[];
+    steps: StepDesign[];
   } | null;
 };
 
@@ -142,6 +219,125 @@ function ApproverEditor({ approver, people, fields, onChange, onRemove, testId }
   );
 }
 
+const KIND_LABEL: Record<StepKind, string> = {
+  approval: "Approval",
+  notify: "Tell people",
+  fill_in: "Fill in fields",
+  parallel: "Branches at the same time",
+};
+
+/// A list of steps; parallel steps hold lists of their own (one level deep on screen).
+function StepList({ steps, onChange, prefix, depth, people, fields, fillable }: { steps: StepRow[]; onChange: (s: StepRow[]) => void; prefix: string; depth: number; people: Person[]; fields: FieldInfo[]; fillable: FieldInfo[] }) {
+  const set = (i: number, patch: Partial<StepRow>) => onChange(steps.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  const firstMember = () => people.find((p) => p.kind === "member")?.id ?? "";
+  const addTestId = prefix ? `add-step-${prefix.replace(/-$/, "")}` : "add-step";
+  return (
+    <>
+      <ol className={`steps ${depth > 0 ? "nested" : ""}`}>
+        {steps.map((s, i) => {
+          const id = `${prefix}${i}`;
+          const toggle = (field: string) => set(i, { fields: s.fields.includes(field) ? s.fields.filter((f) => f !== field) : [...s.fields, field] });
+          return (
+            <li key={s.uid} className="step-card" data-testid="step-row">
+              <div className="row">
+                <select value={s.kind} onChange={(e) => set(i, { ...blankStep(e.target.value as StepKind), uid: s.uid, name: s.name, when: s.when })} data-testid={`step-kind-${id}`}>
+                  {(Object.keys(KIND_LABEL) as StepKind[]).filter((k) => depth === 0 || k !== "parallel").map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
+                </select>
+                <input value={s.name} onChange={(e) => set(i, { name: e.target.value })} placeholder="Step name, e.g. Manager" data-testid={`step-name-${id}`} />
+                <button className="ghost small" onClick={() => onChange(steps.filter((_, j) => j !== i))} data-testid={`remove-step-${id}`}>✕</button>
+              </div>
+              {s.kind !== "parallel" && (
+                <div className="row wrap">
+                  {s.kind === "fill_in" && <span className="small muted">who fills in:</span>}
+                  {s.approvers.map((a, j) => (
+                    <ApproverEditor
+                      key={j}
+                      approver={a}
+                      people={people}
+                      fields={fields}
+                      onChange={(next) => set(i, { approvers: s.approvers.map((x, k) => (k === j ? next : x)) })}
+                      onRemove={() => set(i, { approvers: s.approvers.filter((_, k) => k !== j) })}
+                      testId={`step-${id}-approver-${j}`}
+                    />
+                  ))}
+                  {(s.kind !== "fill_in" || s.approvers.length === 0) && (
+                    <button className="ghost small" onClick={() => set(i, { approvers: [...s.approvers, { kind: "person", id: firstMember() }] })} data-testid={`step-${id}-add-approver`}>
+                      + {s.kind === "approval" ? "approver" : s.kind === "notify" ? "recipient" : "person"}
+                    </button>
+                  )}
+                </div>
+              )}
+              {s.kind === "approval" && (
+                <>
+                  <div className="row wrap">
+                    <select value={s.mode} onChange={(e) => set(i, { mode: e.target.value })} data-testid={`step-mode-${id}`}>
+                      <option value="any">any one of them decides</option>
+                      <option value="all">all of them must approve</option>
+                      <option value="sequential">one after another</option>
+                      <option value="quorum">a number of them must approve</option>
+                    </select>
+                    {s.mode === "quorum" && (
+                      <label className="inline"><input type="number" min={1} value={s.required} onChange={(e) => set(i, { required: Number(e.target.value) || 1 })} style={{ width: "4rem" }} data-testid={`step-required-${id}`} /> approvals needed</label>
+                    )}
+                    <label className="inline"><input type="checkbox" checked={s.canSendBack} onChange={(e) => set(i, { canSendBack: e.target.checked })} data-testid={`step-sendback-${id}`} /> may send back</label>
+                  </div>
+                  <div className="row wrap">
+                    <label className="inline">overdue after <input type="number" min={1} value={s.timeoutHours} onChange={(e) => set(i, { timeoutHours: e.target.value })} placeholder="—" style={{ width: "5rem" }} data-testid={`step-timeout-${id}`} /> hours</label>
+                    {s.timeoutHours && (
+                      s.escalateTo ? (
+                        <>
+                          <span className="small muted">then hand to</span>
+                          <ApproverEditor approver={s.escalateTo} people={people} fields={fields} onChange={(next) => set(i, { escalateTo: next })} onRemove={() => set(i, { escalateTo: null })} testId={`step-${id}-escalate`} />
+                        </>
+                      ) : (
+                        <button className="ghost small" onClick={() => set(i, { escalateTo: { kind: "person", id: firstMember() } })} data-testid={`step-${id}-add-escalate`}>+ then hand to…</button>
+                      )
+                    )}
+                  </div>
+                </>
+              )}
+              {s.kind === "fill_in" && (
+                <div className="chips wrap">
+                  {fillable.map((f) => (
+                    <label key={f.id} className={`chip-toggle ${s.fields.includes(f.id) ? "on" : ""}`} data-testid={`step-${id}-field-${f.name}`}>
+                      <input type="checkbox" checked={s.fields.includes(f.id)} onChange={() => toggle(f.id)} />
+                      {f.name}
+                    </label>
+                  ))}
+                </div>
+              )}
+              {s.kind === "parallel" && (
+                <>
+                  <div className="row">
+                    <span className="small muted">continue when</span>
+                    <select value={s.join} onChange={(e) => set(i, { join: e.target.value })} data-testid={`step-join-${id}`}>
+                      <option value="all">all branches finished</option>
+                      <option value="any">any branch finished</option>
+                      <option value="at_least">a number of branches finished</option>
+                    </select>
+                    {s.join === "at_least" && <input type="number" min={1} value={s.count} onChange={(e) => set(i, { count: Number(e.target.value) || 1 })} style={{ width: "4rem" }} data-testid={`step-count-${id}`} />}
+                  </div>
+                  <div className="branches">
+                    {s.branches.map((branch, j) => (
+                      <div className="branch" key={j} data-testid={`branch-${id}-${j}`}>
+                        <div className="row"><b className="small">Branch {j + 1}</b><button className="ghost small" onClick={() => set(i, { branches: s.branches.filter((_, k) => k !== j) })}>✕</button></div>
+                        <StepList steps={branch} onChange={(next) => set(i, { branches: s.branches.map((b, k) => (k === j ? next : b)) })} prefix={`${id}-b${j}-`} depth={depth + 1} people={people} fields={fields} fillable={fillable} />
+                      </div>
+                    ))}
+                    <button className="ghost small" onClick={() => set(i, { branches: [...s.branches, []] })} data-testid={`step-${id}-add-branch`}>+ branch</button>
+                  </div>
+                </>
+              )}
+              <ConditionEditor when={s.when} fields={fields} onChange={(when) => set(i, { when })} testId={`step-when-${id}`} />
+            </li>
+          );
+        })}
+      </ol>
+      <button className="secondary small" onClick={() => onChange([...steps, blankStep()])} data-testid={addTestId}>+ Step</button>
+    </>
+  );
+}
+
 export default function DesignerPage({ tableId }: { tableId: string }) {
   const [tableName, setTableName] = useState("");
   const [fields, setFields] = useState<FieldInfo[]>([]);
@@ -214,13 +410,7 @@ export default function DesignerPage({ tableId }: { tableId: string }) {
       setApproved(byKey.get(a.approved) ?? "");
       setRejected(byKey.get(a.rejected) ?? "");
       setReturned(byKey.get(a.returned) ?? "");
-      setSteps(
-        a.steps.map((s) =>
-          s.kind === "approval"
-            ? { uid: uid(), kind: "approval", name: s.name, approvers: s.approvers, mode: s.mode.mode, canSendBack: s.canSendBack, when: s.when }
-            : { uid: uid(), kind: "notify", name: s.name, approvers: s.to, mode: "any", canSendBack: false, when: s.when },
-        ),
-      );
+      setSteps(a.steps.map(fromDesign));
     }
   };
 
@@ -271,11 +461,7 @@ export default function DesignerPage({ tableId }: { tableId: string }) {
             approved: keyOf.get(approved) ?? "",
             rejected: keyOf.get(rejected) ?? "",
             returned: keyOf.get(returned) ?? "",
-            steps: steps.map((s) =>
-              s.kind === "approval"
-                ? { kind: "approval" as const, name: s.name, approvers: s.approvers, mode: { mode: s.mode }, canSendBack: s.canSendBack, when: s.when }
-                : { kind: "notify" as const, name: s.name, to: s.approvers, when: s.when },
-            ),
+            steps: steps.map(toDesign),
           }
         : null,
     };
@@ -290,7 +476,6 @@ export default function DesignerPage({ tableId }: { tableId: string }) {
 
   const setState = (i: number, patch: Partial<StateRow>) => setStates(states.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const setButton = (i: number, patch: Partial<ButtonRow>) => setButtons(buttons.map((b, j) => (j === i ? { ...b, ...patch } : b)));
-  const setStep = (i: number, patch: Partial<StepRow>) => setSteps(steps.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const toggle = (list: string[], value: string) => (list.includes(value) ? list.filter((x) => x !== value) : [...list, value]);
   const stateOptions = states.map((s) => <option key={s.uid} value={s.uid}>{s.name || "(unnamed)"}</option>);
 
@@ -398,46 +583,7 @@ export default function DesignerPage({ tableId }: { tableId: string }) {
               <label className="inline">rejected <select value={rejected} onChange={(e) => setRejected(e.target.value)} data-testid="approval-rejected"><option value="">…</option>{stateOptions}</select></label>
               <label className="inline">sent back <select value={returned} onChange={(e) => setReturned(e.target.value)} data-testid="approval-returned"><option value="">…</option>{stateOptions}</select></label>
             </div>
-            <ol className="steps">
-              {steps.map((s, i) => (
-                <li key={s.uid} className="step-card" data-testid="step-row">
-                  <div className="row">
-                    <select value={s.kind} onChange={(e) => setStep(i, { kind: e.target.value as "approval" | "notify" })} data-testid={`step-kind-${i}`}>
-                      <option value="approval">Approval</option>
-                      <option value="notify">Tell people</option>
-                    </select>
-                    <input value={s.name} onChange={(e) => setStep(i, { name: e.target.value })} placeholder="Step name, e.g. Manager" data-testid={`step-name-${i}`} />
-                    <button className="ghost small" onClick={() => setSteps(steps.filter((_, j) => j !== i))} data-testid={`remove-step-${i}`}>✕</button>
-                  </div>
-                  <div className="row wrap">
-                    {s.approvers.map((a, j) => (
-                      <ApproverEditor
-                        key={j}
-                        approver={a}
-                        people={people}
-                        fields={fields}
-                        onChange={(next) => setStep(i, { approvers: s.approvers.map((x, k) => (k === j ? next : x)) })}
-                        onRemove={() => setStep(i, { approvers: s.approvers.filter((_, k) => k !== j) })}
-                        testId={`step-${i}-approver-${j}`}
-                      />
-                    ))}
-                    <button className="ghost small" onClick={() => setStep(i, { approvers: [...s.approvers, { kind: "person", id: people.find((p) => p.kind === "member")?.id ?? "" }] })} data-testid={`step-${i}-add-approver`}>+ {s.kind === "approval" ? "approver" : "recipient"}</button>
-                  </div>
-                  {s.kind === "approval" && (
-                    <div className="row">
-                      <select value={s.mode} onChange={(e) => setStep(i, { mode: e.target.value })} data-testid={`step-mode-${i}`}>
-                        <option value="any">any one of them decides</option>
-                        <option value="all">all of them must approve</option>
-                        <option value="sequential">one after another</option>
-                      </select>
-                      <label className="inline"><input type="checkbox" checked={s.canSendBack} onChange={(e) => setStep(i, { canSendBack: e.target.checked })} data-testid={`step-sendback-${i}`} /> may send back</label>
-                    </div>
-                  )}
-                  <ConditionEditor when={s.when} fields={fields} onChange={(when) => setStep(i, { when })} testId={`step-when-${i}`} />
-                </li>
-              ))}
-            </ol>
-            <button className="secondary small" onClick={() => setSteps([...steps, { uid: uid(), kind: "approval", name: "", approvers: [], mode: "any", canSendBack: true, when: null }])} data-testid="add-step">+ Step</button>
+            <StepList steps={steps} onChange={setSteps} prefix="" depth={0} people={people} fields={fields} fillable={editable} />
             <p className="muted small">The requester is never asked to approve their own request. “Whoever holds a capability” asks everyone the access rules allow for that very record (limits included).</p>
           </>
         )}

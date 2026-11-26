@@ -730,6 +730,19 @@ impl Workspace {
         now: Timestamp,
     ) -> ApiResult<Vec<(FieldId, Value)>> {
         let permissions = self.field_permissions(actor, table, record, now);
+        let may_write = |field: FieldId| permissions.get(&field).is_some_and(|p| p.editable);
+        self.parse_inputs(table, record, inputs, &may_write, now)
+    }
+
+    /// Reads and validates inputs; `may_write` decides which fields this writer may set.
+    fn parse_inputs(
+        &self,
+        table: &Table,
+        record: Option<&Record>,
+        inputs: &BTreeMap<FieldId, CellInput>,
+        may_write: &dyn Fn(FieldId) -> bool,
+        now: Timestamp,
+    ) -> ApiResult<Vec<(FieldId, Value)>> {
         let resolver = self.refdata.resolver(now.date(), &NoParameters);
         let currency = Currency::new("USD").ok();
         let ctx = ParseContext {
@@ -745,7 +758,7 @@ impl Workspace {
                 issues.push(json!({"field": field.id, "message": issue.message}));
                 continue;
             }
-            if !permissions.get(field_id).is_some_and(|p| p.editable) {
+            if !may_write(*field_id) {
                 issues.push(json!({
                     "field": field.id,
                     "message": format!("you may not change `{}`", field.name)
@@ -787,6 +800,65 @@ impl Workspace {
                 json!(issues),
             ))
         }
+    }
+
+    /// Writes the fields of a fill-in task: exactly `allowed`, whatever the record's state and
+    /// the assignee's own rights (the task is the right). Validated like any change; audited.
+    ///
+    /// # Errors
+    /// 404; 422 for other fields or unacceptable values.
+    pub(crate) fn fill_in(
+        &mut self,
+        actor: Actor,
+        (table_id, record_id): (TableId, RecordId),
+        inputs: &BTreeMap<FieldId, CellInput>,
+        allowed: &[FieldId],
+        task: &str,
+        now: Timestamp,
+    ) -> ApiResult<()> {
+        let table = self.table(table_id)?;
+        let record = table
+            .record(record_id)
+            .ok_or_else(|| ApiError::not_found(format!("record {record_id}")))?;
+        let may_write = |field: FieldId| allowed.contains(&field);
+        let values = self.parse_inputs(table, Some(record), inputs, &may_write, now)?;
+        let changes: Vec<serde_json::Value> = values
+            .iter()
+            .filter_map(|(field, value)| {
+                let def = table.field(*field)?;
+                let old = record.cells.get(field).cloned().unwrap_or(Value::Null);
+                (old != *value).then(|| {
+                    json!({"field": def.name, "from": crate::view::display(self, def, &old), "to": crate::view::display(self, def, value)})
+                })
+            })
+            .collect();
+        if changes.is_empty() {
+            return Ok(());
+        }
+        {
+            let record = self
+                .table_mut(table_id)?
+                .records
+                .iter_mut()
+                .find(|r| r.id == record_id)
+                .ok_or_else(|| ApiError::not_found(format!("record {record_id}")))?;
+            for (field, value) in values {
+                set_cell(record, field, value);
+            }
+            record.modified_by = actor.on_behalf_of.unwrap_or(actor.principal);
+            record.modified_at = now;
+            record.version = record.version.saturating_add(1);
+        }
+        self.recompute(now);
+        let title = self.title(table_id, record_id);
+        self.audit(
+            actor,
+            "record.update",
+            table_id,
+            Some(record_id),
+            json!({"title": title, "changes": changes, "task": task}),
+            now,
+        )
     }
 
     /// Creates a record.

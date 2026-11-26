@@ -295,3 +295,8 @@ a.button.secondary { background: var(--surface); color: var(--text); border-colo
 .step-card { border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; background: var(--surface); }
 .approver, .condition { display: inline-flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; }
 .condition { font-size: 0.85rem; color: var(--muted); }
+.steps.nested { margin: 0.25rem 0; }
+.branches { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.5rem; }
+.branch { border: 1px dashed var(--border); border-radius: 8px; padding: 0.5rem; background: var(--surface-2); }
+.fill-in-form { display: flex; flex-direction: column; gap: 0.5rem; }
+.task-card .bad { color: var(--bad); }

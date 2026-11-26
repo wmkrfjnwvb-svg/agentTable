@@ -948,6 +948,8 @@ fn process(ws: &mut Workspace, now: Timestamp) -> ApiResult<()> {
                     }],
                     mode: Mode::Any,
                     can_send_back: true,
+                    timeout_hours: None,
+                    escalate_to: None,
                     when: None,
                 },
                 StepDesign::Approval {
@@ -955,6 +957,8 @@ fn process(ws: &mut Workspace, now: Timestamp) -> ApiResult<()> {
                     approvers: vec![Approver::Person { id: ERIN }],
                     mode: Mode::Any,
                     can_send_back: true,
+                    timeout_hours: None,
+                    escalate_to: None,
                     when: Some(SimpleCondition {
                         field: request::NEEDS_CFO,
                         op: Operator::Eq,
@@ -995,6 +999,7 @@ fn approve_as(
         run,
         task,
         mt_lifecycle::approval::Act::Approve { comment: None },
+        &BTreeMap::new(),
         now,
     )
     .map(|_| ())

@@ -15,7 +15,7 @@ use mt_core::id::{FieldId, LifecycleId, RefItemId, TableId};
 use mt_core::state::StateCategory;
 use mt_core::time::Timestamp;
 use mt_core::value::Value;
-use mt_lifecycle::approval::{ApprovalDef, Approver, Case, Mode, Node};
+use mt_lifecycle::approval::{ApprovalDef, Approver, Case, Join, Mode, Node};
 use mt_lifecycle::lifecycle::{Lifecycle, StateDef, Transition};
 use mt_perm::{Action, Actor};
 use serde::{Deserialize, Serialize};
@@ -86,11 +86,25 @@ pub enum StepDesign {
         name: String,
         /// Who.
         approvers: Vec<Approver>,
-        /// How they decide.
+        /// How they decide (any, all, one after another, or a quorum).
         mode: Mode,
         /// Whether they may send the request back.
         #[serde(default, rename = "canSendBack")]
         can_send_back: bool,
+        /// Hours a task may stay open before it is overdue.
+        #[serde(
+            default,
+            rename = "timeoutHours",
+            skip_serializing_if = "Option::is_none"
+        )]
+        timeout_hours: Option<u32>,
+        /// Who takes over an overdue task.
+        #[serde(
+            default,
+            rename = "escalateTo",
+            skip_serializing_if = "Option::is_none"
+        )]
+        escalate_to: Option<Approver>,
         /// Only when this holds.
         #[serde(default)]
         when: Option<SimpleCondition>,
@@ -105,7 +119,54 @@ pub enum StepDesign {
         #[serde(default)]
         when: Option<SimpleCondition>,
     },
+    /// Someone completes fields (while the record is otherwise locked).
+    FillIn {
+        /// Name.
+        name: String,
+        /// Who.
+        assignee: Approver,
+        /// The fields to complete.
+        fields: Vec<FieldId>,
+        /// Only when this holds.
+        #[serde(default)]
+        when: Option<SimpleCondition>,
+    },
+    /// Branches that run at the same time.
+    Parallel {
+        /// Name.
+        name: String,
+        /// The branches, each a list of steps.
+        branches: Vec<Vec<StepDesign>>,
+        /// When the block is finished.
+        join: Join,
+        /// Only when this holds.
+        #[serde(default)]
+        when: Option<SimpleCondition>,
+    },
 }
+
+impl StepDesign {
+    fn name(&self) -> &str {
+        match self {
+            StepDesign::Approval { name, .. }
+            | StepDesign::Notify { name, .. }
+            | StepDesign::FillIn { name, .. }
+            | StepDesign::Parallel { name, .. } => name,
+        }
+    }
+
+    fn when(&self) -> Option<&SimpleCondition> {
+        match self {
+            StepDesign::Approval { when, .. }
+            | StepDesign::Notify { when, .. }
+            | StepDesign::FillIn { when, .. }
+            | StepDesign::Parallel { when, .. } => when.as_ref(),
+        }
+    }
+}
+
+/// Longest timeout a step may have: a year.
+pub const MAX_TIMEOUT_HOURS: u32 = 8_760;
 
 /// The approval of a table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -266,45 +327,106 @@ fn steps(
     design: &[StepDesign],
 ) -> ApiResult<Vec<Node>> {
     let mut taken = BTreeSet::new();
+    compile(ws, table, design, &mut taken)
+}
+
+fn compile(
+    ws: &Workspace,
+    table: &crate::model::Table,
+    design: &[StepDesign],
+    taken: &mut BTreeSet<String>,
+) -> ApiResult<Vec<Node>> {
     let mut nodes = Vec::new();
     for step in design {
-        let (name, when) = match step {
-            StepDesign::Approval { name, when, .. } | StepDesign::Notify { name, when, .. } => {
-                (name.trim().to_owned(), when.as_ref())
-            }
-        };
+        let name = step.name().trim().to_owned();
         if name.is_empty() {
             return Err(invalid("every step needs a name"));
         }
-        let key = unique(slug(&name), &mut taken);
+        let key = unique(slug(&name), taken);
         let node = match step {
             StepDesign::Approval {
                 approvers,
                 mode,
                 can_send_back,
+                timeout_hours,
+                escalate_to,
                 ..
-            } => Node::Approval {
-                key: key.clone(),
-                name: name.clone(),
-                approvers: approvers.clone(),
-                mode: *mode,
-                allow_return: *can_send_back,
-                timeout: None,
-                escalate_to: None,
-            },
+            } => {
+                let timeout = match timeout_hours {
+                    None => None,
+                    Some(hours) if (1..=MAX_TIMEOUT_HOURS).contains(hours) => {
+                        Some(mt_core::time::DurationMs::from_millis(
+                            i64::from(*hours).saturating_mul(3_600_000),
+                        ))
+                    }
+                    Some(_) => {
+                        return Err(invalid(format!(
+                            "“{name}”: a timeout is 1 to {MAX_TIMEOUT_HOURS} hours"
+                        )))
+                    }
+                };
+                if escalate_to.is_some() && timeout.is_none() {
+                    return Err(invalid(format!("“{name}”: escalation needs a timeout")));
+                }
+                Node::Approval {
+                    key: key.clone(),
+                    name: name.clone(),
+                    approvers: approvers.clone(),
+                    mode: *mode,
+                    allow_return: *can_send_back,
+                    timeout,
+                    escalate_to: escalate_to.clone(),
+                }
+            }
             StepDesign::Notify { to, .. } => Node::Notify {
                 key: key.clone(),
                 name: name.clone(),
                 to: to.clone(),
             },
+            StepDesign::FillIn {
+                assignee, fields, ..
+            } => {
+                for field in fields {
+                    let def = table.field(*field).ok_or_else(|| {
+                        invalid(format!(
+                            "“{name}”: {field} is not a field of {}",
+                            table.name
+                        ))
+                    })?;
+                    if def.is_generated() {
+                        return Err(invalid(format!(
+                            "“{name}”: “{}” fills itself and cannot be filled in",
+                            def.name
+                        )));
+                    }
+                }
+                Node::FillIn {
+                    key: key.clone(),
+                    name: name.clone(),
+                    assignee: assignee.clone(),
+                    fields: fields.clone(),
+                }
+            }
+            StepDesign::Parallel { branches, join, .. } => {
+                let mut compiled = Vec::new();
+                for branch in branches {
+                    compiled.push(compile(ws, table, branch, taken)?);
+                }
+                Node::Parallel {
+                    key: key.clone(),
+                    name: name.clone(),
+                    branches: compiled,
+                    join: *join,
+                }
+            }
         };
-        match when {
+        match step.when() {
             None => nodes.push(node),
             Some(simple) => {
                 let when = condition(table, simple)?;
                 let text = crate::process::condition_text(ws, table, &when);
                 nodes.push(Node::Branch {
-                    key: unique(format!("{key}_when"), &mut taken),
+                    key: unique(format!("{key}_when"), taken),
                     name: format!("Only when {text}"),
                     cases: vec![Case {
                         name: text,

@@ -697,6 +697,64 @@ fn cancel_run(ws: &mut Workspace, index: usize, actor: Actor, now: Timestamp) ->
     after(ws, run.id, &def, &outputs, by, now)
 }
 
+/// Time passed: overdue tasks of every running approval are escalated or reported.
+/// Returns how many tasks changed hands or were reported.
+///
+/// # Errors
+/// When an approval's definition is missing (a bug).
+pub fn tick_all(ws: &mut Workspace, now: Timestamp) -> ApiResult<usize> {
+    let running: Vec<usize> = ws
+        .data
+        .process
+        .runs
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.approval.status == Status::Running)
+        .filter(|(_, r)| {
+            r.approval
+                .open_tasks()
+                .iter()
+                .any(|t| !t.escalated && t.due_at.is_some_and(|due| due <= now))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let mut changed = 0_usize;
+    for index in running {
+        let Some(run) = ws.data.process.runs.get(index).cloned() else {
+            continue;
+        };
+        let def = definition(ws, &run.approval.def, Some(run.approval.version))?;
+        let (table, record) = record_of(ws, run.table, run.record)?;
+        let mut approval = run.approval.clone();
+        let outputs = with_env(ws, table, record, now, |env| {
+            approval.step(&def, Event::Tick, env)
+        })
+        .map_err(lifecycle_error)?;
+        changed = changed.saturating_add(
+            outputs
+                .iter()
+                .filter(|o| matches!(o, Output::Reassigned { .. } | Output::Overdue { .. }))
+                .count(),
+        );
+        for output in &outputs {
+            if let Output::Overdue { task } = output {
+                // Nobody takes over: the assignee is reminded.
+                if let Some(t) = approval.tasks.iter().find(|t| t.id == *task) {
+                    let title = ws.title(run.table, run.record);
+                    let text = format!("“{title}” is overdue: please decide");
+                    notify(ws, t.assignee, run.table, run.record, text, now);
+                }
+            }
+        }
+        if let Some(slot) = ws.data.process.runs.get_mut(index) {
+            slot.approval = approval;
+        }
+        let by = run.approval.requester;
+        after(ws, run.id, &def, &outputs, by, now)?;
+    }
+    Ok(changed)
+}
+
 /// Someone acts on one of their tasks.
 ///
 /// # Errors
@@ -707,6 +765,7 @@ pub fn act(
     run_id: u64,
     task: u32,
     act: Act,
+    values: &std::collections::BTreeMap<FieldId, crate::model::CellInput>,
     now: Timestamp,
 ) -> ApiResult<(TableId, RecordId)> {
     if actor.on_behalf_of.is_some() {
@@ -738,6 +797,44 @@ pub fn act(
         Some(record),
         now,
     )?;
+    // A fill-in task writes its fields first; then every one of them must have a value.
+    if let (Act::Submit, Some(open)) = (&act, run.approval.tasks.iter().find(|t| t.id == task)) {
+        if let Some(Node::FillIn { fields, .. }) = def.node(&open.node) {
+            if open.assignee != actor.principal || open.status != TaskStatus::Open {
+                return Err(ApiError::forbidden(
+                    format!("task {task} is not yours"),
+                    Json::Null,
+                ));
+            }
+            let fields = fields.clone();
+            let step_name = def
+                .node(&open.node)
+                .map_or_else(String::new, |n| n.name().to_owned());
+            if !values.is_empty() {
+                ws.fill_in(
+                    actor,
+                    (run.table, run.record),
+                    values,
+                    &fields,
+                    &step_name,
+                    now,
+                )?;
+            }
+            let (table, record) = record_of(ws, run.table, run.record)?;
+            let missing: Vec<String> = fields
+                .iter()
+                .filter(|f| record.cells.get(f).is_none_or(Value::is_empty))
+                .map(|f| field_name(table, *f))
+                .collect();
+            if !missing.is_empty() {
+                return Err(ApiError::invalid(
+                    format!("fill in {} first", missing.join(", ")),
+                    json!(missing),
+                ));
+            }
+        }
+    }
+    let (table, record) = record_of(ws, run.table, run.record)?;
     let step = run
         .approval
         .tasks
@@ -1129,6 +1226,21 @@ fn status_text(status: Status) -> &'static str {
     }
 }
 
+/// The fields a fill-in step asks for, with their type (empty for other steps).
+fn fill_in_fields(ws: &Workspace, table: TableId, node: Option<&Node>) -> Json {
+    let Some(Node::FillIn { fields, .. }) = node else {
+        return json!([]);
+    };
+    let Ok(table) = ws.table(table) else {
+        return json!([]);
+    };
+    json!(fields
+        .iter()
+        .filter_map(|id| table.field(*id))
+        .map(|f| json!({"id": f.id, "name": f.name, "dataType": f.data_type.as_str()}))
+        .collect::<Vec<_>>())
+}
+
 fn run_json(ws: &Workspace, actor: Actor, run: &Run) -> Json {
     let def = definition(ws, &run.approval.def, Some(run.approval.version)).ok();
     let step = |node: &str| {
@@ -1158,6 +1270,8 @@ fn run_json(ws: &Workspace, actor: Actor, run: &Run) -> Json {
             "delegatedFrom": t.delegated_from.map(|p| ws.name_of(p)),
             "mine": deciding && t.status == TaskStatus::Open && t.assignee == actor.principal,
             "canSendBack": def.as_ref().and_then(|d| d.node(&t.node)).is_some_and(|n| matches!(n, Node::Approval { allow_return: true, .. })),
+            "fields": fill_in_fields(ws, run.table, def.as_ref().and_then(|d| d.node(&t.node))),
+            "dueAt": t.due_at,
         })).collect::<Vec<_>>(),
         "history": run.approval.history.iter().map(|e| json!({
             "at": e.at,
@@ -1360,6 +1474,8 @@ pub fn tasks_json(ws: &Workspace, actor: Actor) -> Json {
                 "openedAt": task.opened_at,
                 "delegatedFrom": task.delegated_from.map(|p| ws.name_of(p)),
                 "canSendBack": def.as_ref().and_then(|d| d.node(&task.node)).is_some_and(|n| matches!(n, Node::Approval { allow_return: true, .. })),
+                "fields": fill_in_fields(ws, run.table, def.as_ref().and_then(|d| d.node(&task.node))),
+                "dueAt": task.due_at,
             }));
         }
     }

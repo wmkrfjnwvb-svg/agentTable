@@ -112,6 +112,19 @@ async fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     }
+    // Overdue approval tasks are escalated or reported once a minute.
+    {
+        let app = app.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                every.tick().await;
+                if let Err(error) = app.tick().await {
+                    eprintln!("checking overdue approvals: {error}");
+                }
+            }
+        });
+    }
     let address: SocketAddr = match format!("{}:{}", options.host, options.port).parse() {
         Ok(address) => address,
         Err(_) => {

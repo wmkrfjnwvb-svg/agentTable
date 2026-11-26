@@ -417,6 +417,74 @@ test.describe.serial("build your own: expense claims from scratch", () => {
     await page.getByTestId("user-select").selectOption({ label: "Alice Admin — Workspace administrator" });
   });
 
+  test("the process grows: a timeout with escalation and a fill-in step (version 2)", async () => {
+    await openTable(page, "Expense claims");
+    await addField(page, "date", "Paid on");
+    await page.getByTestId("design-process").click();
+    await expect(page.getByTestId("step-name-0")).toHaveValue("Manager");
+    await page.getByTestId("step-timeout-0").fill("48");
+    await page.getByTestId("step-0-add-escalate").click();
+    await page.getByTestId("step-0-escalate-person").selectOption({ label: "Alice Admin" });
+    await page.getByTestId("add-step").click();
+    await page.getByTestId("step-kind-3").selectOption("fill_in");
+    await page.getByTestId("step-name-3").fill("Payment date");
+    await page.getByTestId("step-3-add-approver").click();
+    await page.getByTestId("step-3-approver-0-person").selectOption({ label: "Fiona Finance" });
+    await page.getByTestId("step-3-field-Paid on").click();
+    // Branches that run at the same time are designed the same way.
+    await page.getByTestId("add-step").click();
+    await page.getByTestId("step-kind-4").selectOption("parallel");
+    await expect(page.getByTestId("branch-4-1")).toBeVisible();
+    await page.getByTestId("add-step-4-b0").click();
+    await page.getByTestId("step-name-4-b0-0").fill("Legal");
+    await page.getByTestId("step-row").last().scrollIntoViewIfNeeded();
+    await shot(page, "23-designer-branches");
+    await page.getByTestId("remove-step-4").click();
+    await page.getByTestId("publish-process").click();
+    await expect(page.getByTestId("designer-message")).toContainText("Published");
+    await expect(page.getByTestId("designer")).toContainText("version 2");
+    await shot(page, "24-process-version-2");
+  });
+
+  test("a second claim: the manager approves, finance fills in the payment date", async () => {
+    await page.getByTestId("user-select").selectOption({ label: "Mia Miller — Sales — submits expenses" });
+    await openTable(page, "Expense claims");
+    await page.getByTestId("new-record").click();
+    await page.getByTestId("edit-Trip purpose").fill("Client lunch");
+    await page.getByTestId("save").click();
+    await expect(page.getByTestId("panel-message")).toHaveText("Saved.");
+    await page.getByTestId("close-panel").click();
+    await openTable(page, "Expense lines");
+    await page.getByTestId("new-record").click();
+    await page.getByTestId("edit-Description").fill("Lunch with Contoso");
+    await page.getByTestId("edit-Amount").fill("80");
+    await page.getByTestId("edit-Claim").selectOption({ label: "Client lunch" });
+    await page.getByTestId("save").click();
+    await expect(page.getByTestId("panel-message")).toHaveText("Saved.");
+    await page.getByTestId("close-panel").click();
+    await openTable(page, "Expense claims");
+    await row(page, "Client lunch").click();
+    await page.getByTestId("transition-submit").click();
+    await expect(page.getByTestId("state")).toHaveText("Submitted");
+    await expect(page.getByTestId("timeline")).toContainText("due");
+    await page.getByTestId("close-panel").click();
+    await page.getByTestId("user-select").selectOption({ label: "Max Manager — Head of sales — approves" });
+    await page.getByTestId("nav-approvals").click();
+    await page.getByTestId("task-card").filter({ hasText: "Client lunch" }).click();
+    await page.getByTestId("task-approve").click();
+    await expect(page.getByTestId("task-done")).toContainText("your decision is recorded");
+    await page.getByTestId("user-select").selectOption({ label: "Fiona Finance — Finance — reviews and pays" });
+    await page.getByTestId("nav-approvals").click();
+    await page.getByTestId("task-card").filter({ hasText: "Client lunch" }).click();
+    await page.getByTestId("task-submit").click();
+    await expect(page.getByTestId("task-message")).toContainText("fill in Paid on first");
+    await page.getByTestId("fill-Paid on").fill("2026-12-01");
+    await shot(page, "25-fill-in");
+    await page.getByTestId("task-submit").click();
+    await expect(page.getByTestId("task-done")).toContainText("Approved");
+    await page.getByTestId("user-select").selectOption({ label: "Alice Admin — Workspace administrator" });
+  });
+
   test("a template installs next to what was built", async () => {
     await page.getByTestId("nav-home").click();
     await page.getByTestId("install-purchasing").click();
@@ -424,7 +492,7 @@ test.describe.serial("build your own: expense claims from scratch", () => {
     await expect(page.getByTestId("base-cards")).toContainText("Purchasing");
     await expect(page.getByTestId("base-cards")).toContainText("Expenses");
     await expect(page.getByTestId("nav-Purchase requests")).toBeVisible();
-    await shot(page, "21-template-installed");
+    await shot(page, "26-template-installed");
   });
 
   test("everything built is in the audit chain", async () => {
@@ -434,6 +502,6 @@ test.describe.serial("build your own: expense claims from scratch", () => {
     }
     await page.getByTestId("verify").click();
     await expect(page.getByTestId("verdict")).toContainText("Chain intact");
-    await shot(page, "22-audit");
+    await shot(page, "27-audit");
   });
 });
