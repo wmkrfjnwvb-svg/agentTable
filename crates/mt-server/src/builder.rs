@@ -897,32 +897,22 @@ fn param_key(key: &str) -> ApiResult<String> {
     }
 }
 
-/// Sets a parameter formulas read with `PARAM("key")`; recomputes what depends on it.
+/// Sets a parameter formulas read with `PARAM("key")` for the workspace, or overrides it
+/// for one base; recomputes what depends on it.
 ///
 /// # Errors
-/// 403 without `settings.manage`; 422 for a bad key or an empty value.
+/// 403 without `settings.manage`; 404 for an unknown base; 422 for a bad key, an empty value
+/// or a value of another type than the setting's.
 pub fn set_param(
     ws: &mut Workspace,
     actor: Actor,
     key: &str,
     value: Value,
+    base: Option<BaseId>,
     now: Timestamp,
 ) -> ApiResult<()> {
-    tenant_require(ws, actor, Action::SettingsManage, now)?;
     let key = param_key(key)?;
-    if value.is_empty() {
-        return Err(ApiError::invalid("give the setting a value", json!(null)));
-    }
-    let shown = serde_json::to_value(&value).unwrap_or(json!(null));
-    ws.data.params.insert(key.clone(), value);
-    ws.recompute(now);
-    ws.audit_object(
-        actor,
-        "setting.update",
-        ObjectRef::new("setting", key.clone()),
-        json!({"key": key, "value": shown}),
-        now,
-    )
+    crate::settings::set(ws, actor, &key, value, base, now)
 }
 
 /// Reads a setting value typed as text: `1000 USD`, `8%`, `12.5`, or plain text.

@@ -16,7 +16,7 @@ so the browser offers and validates the same options as the server.
 | `change` | `Change` (add, update, move, enable / disable, set aliases, remove) and `State::apply`, which routes changes to the tenant overlay for system sets and verifies the result |
 | `ledger` | `Ledger`: versioned history with optimistic concurrency, optional four-eyes approval (`propose` / `approve` / `reject` / `withdraw`), `as_of(version)`, `version_at(time)`, `restore` (replays and verifies stored history). The policy itself is a recorded change (`Change::SetPolicy`): switching four eyes on applies at once, switching it off needs a second person like any other change |
 | `impact` | `impact(set, change, usage)`: which items a change touches and how much they are used; removing an item that is still in use is blocked |
-| `params` | `Registry`: typed parameters with defaults and overrides at tenant, base and user level; `resolve` + `explain` ("is 24: set for the tenant by … at …"); secrets as write-only handles; feature flags; history; choice parameters that feed field options |
+| `params` | `Registry`: typed parameters with defaults and overrides at tenant, base and user level; `resolve` + `explain` ("is 24: set for the tenant by … at …"); secrets as write-only handles; feature flags; history; choice parameters that feed field options; `to_stored` / `from_stored` (a stored form that is checked again on loading: definitions once, known keys, overrides in force valid and at allowed levels); `overrides(key)` |
 | `builtin` | System sets: countries (ISO 3166-1), currencies (ISO 4217, with minor units), languages (ISO 639-1), sex (ISO/IEC 5218), fiscal period types. Ids derive from codes, so they are identical on every installation |
 
 ## Rules (each is asserted by tests)
@@ -70,7 +70,7 @@ so the browser offers and validates the same options as the server.
 |---|---|---|
 | `tests/sets.rs` | Definitions, tree rules, selection by date and scope, labels, search, crosswalks, overlays, catalogue, resolver driving `mt-core` validation, built-in sets | 21 |
 | `tests/ledger.rs` | Every change on tenant and system sets, refusals without side effects, version conflicts, proposals, history and restore, impact, **model-based test of the ledger** | 16 |
-| `tests/params.rs` | Resolution and explanation, flags, secrets, refusals, redefinition, limits, choice parameters feeding field options | 9 |
+| `tests/params.rs` | Resolution and explanation, flags, secrets, refusals, redefinition, limits, choice parameters feeding field options; storing and loading (property: random sets and clears load back identically and explain the same) and refused stored forms | 12 |
 | `tests/properties.rs` | Tree queries agree on random forests, selection consistency, storage round trip, order independence, overlay rules, atomicity; thread-safety and racing writers; size limits | 11 |
 
 ```bash

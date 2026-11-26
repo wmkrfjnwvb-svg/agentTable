@@ -32,8 +32,10 @@ Every push to `main` publishes installable packages for Windows, macOS and Linux
 with screenshots of every end-to-end test step. Unpack, start `start.bat` / `start.command` /
 `start.sh`, and the browser opens the product: an empty workspace in which you build your own
 bases from the components (tables, fields of every kind, code lists, settings, formulas, people,
-lifecycles and approvals in the process designer, access rules) — the end-to-end test builds an
-expense-claim process this way and runs it as three people, screenshots `build-*` — or
+lifecycles and approvals in the process designer, access rules with field limits, periods,
+reviews and share links, code lists with history and four-eyes approval, settings per base) — the
+end-to-end test builds an expense-claim process this way and runs it as three people, screenshots
+`build-*` — or
 install the purchasing sample from the template gallery (screenshots `01`–`29`). What is still
 to come is marked as a placeholder. Switch between people at the top right to see access
 control at work. (The same files are attached to each CI run as artifacts.)

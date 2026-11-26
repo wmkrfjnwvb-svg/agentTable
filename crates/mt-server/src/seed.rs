@@ -1029,6 +1029,7 @@ pub fn empty() -> ApiResult<Workspace> {
         reviews: Vec::new(),
         shares: Vec::new(),
         refset_history: Vec::new(),
+        settings: mt_refdata::StoredRegistry::default(),
     };
     let mut ws = Workspace::new(data)?;
     let perm = |e: mt_perm::PermError| ApiError::internal(e.to_string());
@@ -1110,10 +1111,22 @@ pub fn install_purchasing(ws: &mut Workspace, actor: Actor, now: Timestamp) -> A
             ws.data.people.push(person);
         }
     }
-    ws.data.params.extend([
-        ("tax.rate".to_owned(), Value::Percent(Decimal::new(8, 2))),
-        ("approval.cfo_limit".to_owned(), money(25_000)?),
-    ]);
+    let by = actor.on_behalf_of.unwrap_or(actor.principal);
+    for (key, value) in [
+        ("tax.rate", Value::Percent(Decimal::new(8, 2))),
+        ("approval.cfo_limit", money(25_000)?),
+    ] {
+        if ws.registry().definition(key).is_none() {
+            crate::settings::put(
+                ws.registry_mut(),
+                key,
+                value,
+                mt_refdata::Scope::Tenant,
+                (by, now),
+            )?;
+        }
+    }
+    ws.sync_settings();
     ws.data.links.extend([
         LinkPair {
             table: REQUESTS,

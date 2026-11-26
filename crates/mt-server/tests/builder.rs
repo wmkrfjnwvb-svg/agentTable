@@ -2881,3 +2881,320 @@ fn item_id(list: &Value, name: &str) -> String {
         .unwrap()
         .to_owned()
 }
+
+async fn setting_of(app: &Arc<App>, key: &str) -> Value {
+    let (_, list) = call(app, Method::GET, "/api/settings", None, None).await;
+    list.as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["key"] == key)
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[tokio::test]
+async fn std_settings_are_overridden_per_base_explained_and_kept() {
+    let dir = std::env::temp_dir().join(format!("agenttable-settings-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("data.json");
+    let _ = std::fs::remove_file(&file);
+    let app = app_at(&file, now().millis());
+    let x = build(&app).await;
+    let p = people(&app).await;
+    a_claim_of_600(&app, &x, "Fair").await;
+    let key = "expense.manager_limit";
+    let path = format!("/api/settings/{key}");
+    let needs_finance = |app: Arc<App>| {
+        let claims = x.claims.clone();
+        let field = x.needs_finance.clone();
+        async move { cell(&rows(&app, &claims).await, "Fair", &field) }
+    };
+    let workspace_value = setting_of(&app, key).await["value"].clone();
+    assert_eq!(
+        needs_finance(app.clone()).await,
+        if workspace_value == "1,000.00 USD" {
+            "No"
+        } else {
+            "Yes"
+        }
+    );
+    let (status, _) = call(
+        &app,
+        Method::PUT,
+        &path,
+        Some(ALICE),
+        Some(json!({"type": "money", "text": "1000 USD"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(needs_finance(app.clone()).await, "No");
+    // The Expenses base sets its own, lower limit: its formulas follow.
+    let (status, body) = call(
+        &app,
+        Method::PUT,
+        &path,
+        Some(ALICE),
+        Some(json!({"type": "money", "text": "300 USD", "base": x.base})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(needs_finance(app.clone()).await, "Yes");
+    let setting = setting_of(&app, key).await;
+    assert_eq!(setting["type"], "money");
+    assert_eq!(
+        setting["value"], "1,000.00 USD",
+        "the workspace value is unchanged"
+    );
+    let overrides = setting["overrides"].as_array().unwrap();
+    assert_eq!(overrides.len(), 2);
+    assert_eq!(overrides[1]["for"], "the base Expenses");
+    assert_eq!(overrides[1]["value"], "300.00 USD");
+    assert_eq!(overrides[1]["by"], "Alice Admin");
+    assert!(setting["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|h| h["for"] == "the base Expenses" && h["value"] == "300.00 USD"));
+    // Explained for the base, for the workspace, and for a base without its own value.
+    let explain = |base: Option<&str>| {
+        let app = app.clone();
+        let query = base.map_or_else(String::new, |b| format!("?base={b}"));
+        let path = format!("{path}/explain{query}");
+        async move { call(&app, Method::GET, &path, None, None).await }
+    };
+    let (_, here) = explain(Some(&x.base)).await;
+    assert_eq!(here["value"], "300.00 USD");
+    assert!(
+        here["text"].as_str().unwrap().contains(
+            "is 300.00 USD for the base Expenses: set for the base Expenses by Alice Admin on 2026-11-18 10:00 UTC."
+        ),
+        "{here}"
+    );
+    let (_, everywhere) = explain(None).await;
+    assert!(everywhere["text"]
+        .as_str()
+        .unwrap()
+        .contains("is 1,000.00 USD for the whole workspace: set for the whole workspace"));
+    let other = id(&app, "/api/bases", json!({"name": "Travel desk"})).await;
+    let (_, elsewhere) = explain(Some(&other)).await;
+    assert_eq!(elsewhere["value"], "1,000.00 USD");
+    assert!(elsewhere["text"].as_str().unwrap().contains("for the base Travel desk, which has no value of its own: the value for the whole workspace applies (set by Alice Admin"), "{elsewhere}");
+    let (_, unset) = call(
+        &app,
+        Method::PUT,
+        "/api/settings/travel.daily_allowance",
+        Some(ALICE),
+        Some(json!({"type": "money", "text": "80 EUR", "base": other})),
+    )
+    .await;
+    assert_eq!(unset["updated"], true);
+    let (_, none) = call(
+        &app,
+        Method::GET,
+        "/api/settings/travel.daily_allowance/explain",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        none["text"],
+        "`travel.daily_allowance` has no value for the whole workspace."
+    );
+    assert!(none["value"].is_null());
+    // Someone who manages the settings of one base sets its override, not the workspace's.
+    assert_eq!(grant(&app, json!({"to": p.max, "capability": "settings.manage", "on": {"kind": "base", "id": x.base}, "reason": "Runs the expense base"})).await.0, StatusCode::OK);
+    assert_eq!(
+        call(
+            &app,
+            Method::PUT,
+            &path,
+            Some(&p.max),
+            Some(json!({"type": "money", "text": "400 USD", "base": x.base}))
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &app,
+            Method::PUT,
+            &path,
+            Some(&p.max),
+            Some(json!({"type": "money", "text": "400 USD"}))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            Method::PUT,
+            &path,
+            Some(&p.max),
+            Some(json!({"type": "money", "text": "400 USD", "base": other}))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            Method::PUT,
+            &path,
+            Some(&p.mia),
+            Some(json!({"type": "money", "text": "1 USD", "base": x.base}))
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    // A setting keeps its type; removing the override brings the workspace value back.
+    let (status, body) = call(
+        &app,
+        Method::PUT,
+        &path,
+        Some(ALICE),
+        Some(json!({"type": "number", "text": "5", "base": x.base})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(
+        call(
+            &app,
+            Method::DELETE,
+            &format!("{path}?base={}", x.base),
+            Some(ALICE),
+            None
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(needs_finance(app.clone()).await, "No");
+    assert_eq!(
+        call(
+            &app,
+            Method::DELETE,
+            &format!("{path}?base={}", x.base),
+            Some(ALICE),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND,
+        "nothing to remove"
+    );
+    assert_eq!(
+        call(
+            &app,
+            Method::DELETE,
+            &format!("{path}?base=bas_0000000000000000000000000z"),
+            Some(ALICE),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            Method::DELETE,
+            "/api/settings/no.such",
+            Some(ALICE),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            Method::DELETE,
+            &format!("{path}?base={}", x.base),
+            Some(&p.mia),
+            None
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &app,
+            Method::GET,
+            "/api/settings/no.such/explain",
+            None,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            Method::PUT,
+            &path,
+            Some(ALICE),
+            Some(
+                json!({"type": "money", "text": "1 USD", "base": "bas_0000000000000000000000000z"})
+            )
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let history = setting_of(&app, key).await["history"].clone();
+    let base_history: Vec<&Value> = history
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|h| h["for"] == "the base Expenses")
+        .collect();
+    assert_eq!(base_history[0]["value"], "cleared", "newest first");
+    assert_eq!(base_history[1]["by"], "Max Manager");
+    assert_eq!(base_history.len(), 3);
+    let (_, audit) = call(&app, Method::GET, "/api/audit", Some(ALICE), None).await;
+    assert!(audit.to_string().contains("setting.clear"));
+    // Saved and reloaded; settings saved the old way are carried over.
+    drop(app);
+    let mut stored: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert!(stored.get("params").is_none(), "only the new form is saved");
+    let rate = stored["settings"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["key"] == key)
+        .unwrap()["entry"]["setting"]["value"]
+        .clone();
+    stored["params"] = json!({"legacy.limit": rate});
+    std::fs::write(&file, stored.to_string()).unwrap();
+    let again = app_at(&file, now().millis());
+    let legacy = setting_of(&again, "legacy.limit").await;
+    assert_eq!(legacy["value"], "1,000.00 USD");
+    assert_eq!(legacy["history"][0]["by"], "the system");
+    assert_eq!(
+        setting_of(&again, key).await["overrides"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    drop(again);
+    // Settings that do not hold are not loaded.
+    let mut broken: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    broken["settings"]["definitions"][0]["key"] = json!("Bad Key");
+    std::fs::write(&file, broken.to_string()).unwrap();
+    assert!(mt_server::open(
+        Some(file.clone()),
+        Clock::Fixed(now()),
+        mt_server::Start::Empty
+    )
+    .is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -20,8 +20,10 @@ use mt_core::value::Value;
 use mt_refdata::params::{check_key, Entry, MAX_HISTORY, MAX_JSON_BYTES, MAX_KEY_CHARS};
 use mt_refdata::{
     EffectiveSet, NoParameters, ParamContext, ParamDef, ParamKind, ParameterOptions, RefData,
-    RefDataError, Registry, Scope, ScopeLevel, SecretRef, Setting, Source,
+    RefDataError, Registry, Scope, ScopeLevel, SecretRef, Setting, Source, StoredChange,
+    StoredRegistry,
 };
+use proptest::prelude::*;
 
 fn dec(text: &str) -> Decimal {
     text.parse().unwrap()
@@ -883,4 +885,217 @@ fn std_choice_parameters_use_reference_data_and_feed_field_options() {
         codes(Value::Reference(rid(11))),
         vec![IssueCode::OptionNotAllowed]
     );
+}
+
+#[test]
+fn std_a_registry_is_stored_and_loaded_exactly() {
+    let any = AcceptAllOptions;
+    let mut registry = registry();
+    let alice = person(1);
+    let key = "approval.timeout_hours";
+    registry
+        .set(key, Scope::Tenant, value(num("24")), alice, at(1), &any)
+        .unwrap();
+    registry
+        .set(
+            key,
+            Scope::Base { base: base(7) },
+            value(num("72")),
+            alice,
+            at(2),
+            &any,
+        )
+        .unwrap();
+    registry
+        .set(
+            key,
+            Scope::Base { base: base(8) },
+            value(num("12")),
+            alice,
+            at(3),
+            &any,
+        )
+        .unwrap();
+    registry
+        .clear(key, Scope::Base { base: base(8) }, alice, at(4))
+        .unwrap();
+    registry
+        .set(
+            "mail.smtp_password",
+            Scope::Tenant,
+            Setting::Secret(SecretRef::new("vault:smtp").unwrap()),
+            alice,
+            at(5),
+            &any,
+        )
+        .unwrap();
+    let stored = registry.to_stored();
+    assert_eq!(stored.definitions.len(), 5);
+    assert_eq!(stored.changes.len(), 5);
+    // Through JSON and back: the very same registry.
+    let text = serde_json::to_string(&stored).unwrap();
+    assert!(!text.contains("hunter2"));
+    let loaded = Registry::from_stored(serde_json::from_str(&text).unwrap(), &any).unwrap();
+    assert_eq!(loaded, registry);
+    assert_eq!(loaded.history(key, Scope::Base { base: base(8) }).len(), 2);
+    // What is set now, per scope.
+    let overrides = loaded.overrides(key);
+    assert_eq!(
+        overrides.len(),
+        2,
+        "the cleared base override is not in force"
+    );
+    assert_eq!(overrides[0].0, Scope::Tenant);
+    assert_eq!(overrides[1].0, Scope::Base { base: base(7) });
+    assert_eq!(overrides[1].1, &value(num("72")));
+    assert_eq!(overrides[1].2.by, alice);
+    assert!(loaded.overrides("ui.greeting").is_empty());
+    assert!(loaded.overrides("no.such").is_empty());
+    // An empty store is an empty registry.
+    assert_eq!(
+        Registry::from_stored(StoredRegistry::default(), &any).unwrap(),
+        Registry::new()
+    );
+}
+
+#[test]
+fn invalid_stored_registries_are_refused() {
+    let any = AcceptAllOptions;
+    let mut registry = registry();
+    let alice = person(1);
+    let key = "approval.timeout_hours";
+    registry
+        .set(
+            key,
+            Scope::Base { base: base(7) },
+            value(num("72")),
+            alice,
+            at(2),
+            &any,
+        )
+        .unwrap();
+    let good = registry.to_stored();
+    // A definition twice.
+    let mut twice = good.clone();
+    twice.definitions.push(twice.definitions[0].clone());
+    assert!(matches!(
+        Registry::from_stored(twice, &any),
+        Err(RefDataError::InvalidParameter { .. })
+    ));
+    // A change of an unknown parameter.
+    let mut unknown = good.clone();
+    unknown.changes.push(StoredChange {
+        key: "no.such".into(),
+        scope: Scope::Tenant,
+        entry: Entry {
+            setting: Some(value(num("1"))),
+            by: alice,
+            at: at(3),
+        },
+    });
+    assert!(matches!(
+        Registry::from_stored(unknown, &any),
+        Err(RefDataError::UnknownParameter { .. })
+    ));
+    // A value its definition does not allow (out of range).
+    let mut out_of_range = good.clone();
+    out_of_range.changes[0].entry.setting = Some(value(num("9999")));
+    assert!(matches!(
+        Registry::from_stored(out_of_range, &any),
+        Err(RefDataError::InvalidParameter { .. })
+    ));
+    // An override at a level the definition does not allow.
+    let mut level = good.clone();
+    level.changes.push(StoredChange {
+        key: "ui.greeting".into(),
+        scope: Scope::Base { base: base(7) },
+        entry: Entry {
+            setting: Some(value(Value::Text("Hi".into()))),
+            by: alice,
+            at: at(3),
+        },
+    });
+    assert!(matches!(
+        Registry::from_stored(level, &any),
+        Err(RefDataError::ScopeNotAllowed { .. })
+    ));
+    // A secret handle on a parameter that is not a secret.
+    let mut secret = good.clone();
+    secret.changes[0].entry.setting = Some(Setting::Secret(SecretRef::new("vault:x").unwrap()));
+    assert!(matches!(
+        Registry::from_stored(secret, &any),
+        Err(RefDataError::InvalidParameter { .. })
+    ));
+    // A cleared override at a level no longer allowed is history, not a problem.
+    let mut cleared = good.clone();
+    cleared.changes.push(StoredChange {
+        key: "ui.greeting".into(),
+        scope: Scope::Base { base: base(7) },
+        entry: Entry {
+            setting: None,
+            by: alice,
+            at: at(3),
+        },
+    });
+    assert!(Registry::from_stored(cleared, &any).is_ok());
+    // An invalid definition.
+    let mut bad_def = good;
+    bad_def.definitions[0].key = "NoDots".into();
+    assert!(Registry::from_stored(bad_def, &any).is_err());
+}
+
+#[derive(Debug, Clone)]
+enum ParamOp {
+    Set(u8, u8, i64),
+    Clear(u8, u8),
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+    /// Whatever is set and cleared, storing and loading gives back the same registry, and
+    /// every context resolves to the same value with the same explanation.
+    #[test]
+    fn prop_stored_registries_load_back_identically(ops in proptest::collection::vec(prop_oneof![
+        (0_u8..3, 0_u8..4, -5_i64..800).prop_map(|(k, s, v)| ParamOp::Set(k, s, v)),
+        (0_u8..3, 0_u8..4).prop_map(|(k, s)| ParamOp::Clear(k, s)),
+    ], 0..40)) {
+        let any = AcceptAllOptions;
+        let mut registry = registry();
+        let keys = ["approval.timeout_hours", "feature.new_grid", "ui.greeting"];
+        let scope = |s: u8| match s {
+            0 => Scope::Tenant,
+            1 => Scope::Base { base: base(1) },
+            2 => Scope::Base { base: base(2) },
+            _ => Scope::User { user: person(9) },
+        };
+        for (step, op) in ops.into_iter().enumerate() {
+            let when = at(i64::try_from(step).unwrap());
+            match op {
+                ParamOp::Set(k, s, v) => {
+                    let key = keys[usize::from(k)];
+                    let setting = match k {
+                        0 => value(num(&v.to_string())),
+                        1 => value(Value::Bool(v % 2 == 0)),
+                        _ => value(Value::Text(format!("hello {v}"))),
+                    };
+                    let _ = registry.set(key, scope(s), setting, person(1), when, &any);
+                }
+                ParamOp::Clear(k, s) => {
+                    let _ = registry.clear(keys[usize::from(k)], scope(s), person(2), when);
+                }
+            }
+        }
+        let text = serde_json::to_string(&registry.to_stored()).unwrap();
+        let loaded = Registry::from_stored(serde_json::from_str(&text).unwrap(), &any).unwrap();
+        prop_assert_eq!(&loaded, &registry);
+        for key in keys {
+            for base_id in [None, Some(base(1)), Some(base(2))] {
+                for user in [None, Some(person(9))] {
+                    let ctx = ParamContext { base: base_id, user };
+                    prop_assert_eq!(loaded.resolve(key, &ctx).unwrap().explain(), registry.resolve(key, &ctx).unwrap().explain());
+                }
+            }
+        }
+    }
 }

@@ -195,7 +195,14 @@ export type BaseSummary = {
   canManageSchema: boolean;
   tables: { id: string; name: string; records: number; canRead: boolean }[];
 };
-export type Setting = { key: string; type: string; value: string };
+export type Setting = {
+  key: string;
+  type: string;
+  description: string;
+  value: string;
+  overrides: { base: string | null; for: string; value: string; by: string; at: number }[];
+  history: { for: string; value: string; by: string; at: number }[];
+};
 export type Template = { key: string; name: string; description: string; installed: boolean };
 export type FieldPatch = { name?: string; required?: boolean; help?: string; options?: { id?: string; label: string }[]; requiredWhen?: { field: string; op: string; text: string } | null };
 export type Option = { value: Value | string; label: string; color?: string; path?: string; depth?: number };
@@ -347,7 +354,9 @@ export const api = {
   createPerson: (name: string, kind: string, title: string, members: string[] = []) => call<{ id: string }>("POST", "/api/people", { name, kind, title, members }),
   updatePerson: (id: string, patch: { name?: string; title?: string; members?: string[] }) => call<{ updated: boolean }>("PATCH", `/api/people/${id}`, patch),
   settings: () => call<Setting[]>("GET", "/api/settings"),
-  setSetting: (key: string, type: string, text: string) => call<{ updated: boolean }>("PUT", `/api/settings/${encodeURIComponent(key)}`, { type, text }),
+  setSetting: (key: string, type: string, text: string, base?: string) => call<{ updated: boolean }>("PUT", `/api/settings/${encodeURIComponent(key)}`, { type, text, base: base || undefined }),
+  clearSetting: (key: string, base?: string) => call<{ cleared: boolean }>("DELETE", `/api/settings/${encodeURIComponent(key)}${base ? `?base=${base}` : ""}`),
+  explainSetting: (key: string, base?: string) => call<{ key: string; for: string; value: string | null; text: string }>("GET", `/api/settings/${encodeURIComponent(key)}/explain${base ? `?base=${base}` : ""}`),
   processDesign: (table: string) =>
     call<{
       table: { id: string; name: string };

@@ -226,8 +226,14 @@ pub struct Data {
     pub people: Vec<Person>,
     /// Grants, capability sets and separation-of-duties rules.
     pub policy: Policy,
-    /// Parameters formulas can read with `PARAM`.
+    /// Parameters as saved before settings had scopes and a history; carried over into
+    /// [`Data::settings`] on load and never saved again.
+    #[serde(default, skip_serializing)]
     pub params: BTreeMap<String, Value>,
+    /// Settings formulas read with `PARAM`: definitions, workspace values, base overrides
+    /// and every change.
+    #[serde(default)]
+    pub settings: mt_refdata::StoredRegistry,
     /// Numbering counters by field and period.
     pub counters: BTreeMap<String, u64>,
     /// The next id number.
@@ -273,6 +279,7 @@ pub struct Workspace {
     /// The saved data.
     pub data: Data,
     refdata: RefData,
+    registry: mt_refdata::Registry,
     graph: Graph,
     log: AuditLog,
 }
@@ -300,14 +307,65 @@ impl Workspace {
         let mut workspace = Workspace {
             data,
             refdata: RefData::new(),
+            registry: mt_refdata::Registry::new(),
             graph: Graph::default(),
             log,
         };
+        workspace.load_settings()?;
         workspace.ensure_bases();
         workspace.rebuild_refdata()?;
         crate::codelist::verify(&workspace)?;
         workspace.rebuild_graph()?;
         Ok(workspace)
+    }
+
+    /// Loads the settings (checking them again), and carries over parameters saved before
+    /// settings had scopes: each becomes a workspace value, set by the system when the data
+    /// was last changed.
+    fn load_settings(&mut self) -> ApiResult<()> {
+        self.registry = mt_refdata::Registry::from_stored(
+            self.data.settings.clone(),
+            &mt_core::validate::AcceptAllOptions,
+        )
+        .map_err(|e| internal(format!("the settings do not load: {e}")))?;
+        let legacy = std::mem::take(&mut self.data.params);
+        if legacy.is_empty() {
+            return Ok(());
+        }
+        let at = self
+            .data
+            .audit
+            .last()
+            .map_or(Ok(Timestamp::EPOCH), |entry| {
+                Timestamp::from_millis(entry.at_ms)
+            })
+            .map_err(internal)?;
+        for (key, value) in legacy {
+            crate::settings::put(
+                &mut self.registry,
+                &key,
+                value,
+                mt_refdata::Scope::Tenant,
+                (crate::settings::SYSTEM, at),
+            )?;
+        }
+        self.sync_settings();
+        Ok(())
+    }
+
+    /// The settings.
+    #[must_use]
+    pub const fn registry(&self) -> &mt_refdata::Registry {
+        &self.registry
+    }
+
+    pub(crate) fn registry_mut(&mut self) -> &mut mt_refdata::Registry {
+        &mut self.registry
+    }
+
+    /// Writes the settings into the saved data.
+    pub(crate) fn sync_settings(&mut self) {
+        self.data.settings = self.registry.to_stored();
     }
 
     /// Data saved before bases existed: its tables belong to the purchasing base.
@@ -434,6 +492,9 @@ impl Workspace {
     /// The name of a principal (its id if unknown).
     #[must_use]
     pub fn name_of(&self, id: PrincipalId) -> String {
+        if id == crate::settings::SYSTEM {
+            return "the system".to_owned();
+        }
         self.person(id)
             .map_or_else(|| id.to_string(), |person| person.name.clone())
     }
@@ -664,7 +725,11 @@ impl Workspace {
                 continue;
             };
             let schema = crate::formula::TableSchema { ws: self, table };
-            let env = crate::formula::FormulaEnv { ws: self, now };
+            let env = crate::formula::FormulaEnv {
+                ws: self,
+                now,
+                base: Some(table.base),
+            };
             let results: Vec<(RecordId, Result<Value, ErrorValue>)> = table
                 .records
                 .iter()

@@ -46,7 +46,9 @@ pub fn number(value: Decimal, min_places: u32) -> String {
     }
 }
 
-fn instant(at: Timestamp) -> String {
+/// An instant as people read it: `2026-05-01 08:15` (UTC).
+#[must_use]
+pub fn instant(at: Timestamp) -> String {
     let text = at.to_string();
     // 2026-05-01T08:15:00.000Z → 2026-05-01 08:15
     text.get(..16)

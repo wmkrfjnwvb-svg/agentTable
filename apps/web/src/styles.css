@@ -320,3 +320,5 @@ a.button.secondary { background: var(--surface); color: var(--text); border-colo
 .codelist-history h4 { margin: 0.6rem 0 0.3rem; }
 .proposal { border: 1px solid #ddd3fe; background: var(--soon-soft); border-radius: 8px; padding: 0.5rem 0.7rem; margin-bottom: 0.4rem; display: flex; flex-direction: column; gap: 0.35rem; }
 .versions { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.88rem; }
+.chip.override { display: inline-flex; align-items: center; gap: 0.2rem; margin-right: 0.3rem; }
+tr.selected td { background: var(--accent-soft); }

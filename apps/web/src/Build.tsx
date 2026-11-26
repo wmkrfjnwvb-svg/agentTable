@@ -324,43 +324,76 @@ export function PeoplePage({ people, onChanged }: { people: Person[]; onChanged:
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<Setting[]>([]);
+  const [bases, setBases] = useState<BaseSummary[]>([]);
   const [key, setKey] = useState("");
   const [type, setType] = useState("money");
   const [text, setText] = useState("");
+  const [base, setBase] = useState("");
+  const [chosen, setChosen] = useState("");
+  const [explainFor, setExplainFor] = useState("");
+  const [explanation, setExplanation] = useState("");
   const [message, fail, clear] = useMessage();
   const load = () => api.settings().then(setSettings).catch(() => setSettings([]));
   useEffect(() => {
     load();
+    api.bases().then((r) => setBases(r.bases)).catch(() => setBases([]));
   }, []);
+  useEffect(() => {
+    if (!chosen) return;
+    api.explainSetting(chosen, explainFor).then((r) => setExplanation(r.text)).catch((e: ApiError) => setExplanation(e.message));
+  }, [chosen, explainFor, settings]);
   const save = async () => {
     clear();
     try {
-      await api.setSetting(key, type, text);
-      setKey("");
+      await api.setSetting(key, type, text, base);
+      setChosen(key.trim());
       setText("");
       load();
     } catch (e) {
       fail(e);
     }
   };
+  const remove = async (k: string, b: string) => {
+    clear();
+    try {
+      await api.clearSetting(k, b);
+      load();
+    } catch (e) {
+      fail(e);
+    }
+  };
+  const selected = settings.find((s) => s.key === chosen);
   return (
     <div className="page" data-testid="settings-page">
       <div className="page-head">
         <div>
           <h1>Settings</h1>
-          <p className="muted">Named values your formulas read with <code>PARAM("key")</code>: limits, rates, thresholds. Change one and every formula that reads it recomputes.</p>
+          <p className="muted">
+            Named values your formulas read with <code>PARAM("key")</code>: limits, rates, thresholds. Set one for the whole workspace and override it for a base: a formula
+            uses the value of its record's base. Change one and every formula that reads it recomputes; every change is kept.
+          </p>
         </div>
       </div>
-      <div className="card narrow">
+      <div className="card">
         <table className="plain" data-testid="settings">
-          <thead><tr><th>Key</th><th>Type</th><th>Value</th></tr></thead>
+          <thead><tr><th>Key</th><th>Type</th><th>Whole workspace</th><th>Per base</th></tr></thead>
           <tbody>
             {settings.map((s) => (
-              <tr key={s.key} onClick={() => { setKey(s.key); setType(s.type); setText(s.value.replace(/,/g, "")); }} className="clickable">
-                <td><code>{s.key}</code></td><td>{s.type}</td><td>{s.value}</td>
+              <tr key={s.key} onClick={() => { setChosen(s.key); setKey(s.key); setType(s.type); setText(s.value.replace(/,/g, "")); }} className={`clickable ${chosen === s.key ? "selected" : ""}`} data-testid={`setting-${s.key}`}>
+                <td><code>{s.key}</code></td>
+                <td>{s.type}</td>
+                <td>{s.value || <span className="muted">—</span>}</td>
+                <td>
+                  {s.overrides.filter((o) => o.base).map((o) => (
+                    <span key={o.base} className="chip override" data-testid={`override-${s.key}-${o.for}`}>
+                      {o.for.replace(/^the base /, "")}: {o.value}
+                      <button className="ghost small" title="Remove: the workspace value applies again" onClick={(e) => { e.stopPropagation(); remove(s.key, o.base ?? ""); }} data-testid={`clear-${s.key}-${o.for}`}>✕</button>
+                    </span>
+                  ))}
+                </td>
               </tr>
             ))}
-            {settings.length === 0 && <tr><td colSpan={3} className="muted">No settings yet.</td></tr>}
+            {settings.length === 0 && <tr><td colSpan={4} className="muted">No settings yet.</td></tr>}
           </tbody>
         </table>
         <h3>Set a value</h3>
@@ -370,10 +403,36 @@ export function SettingsPage() {
             {["money", "number", "percent", "text", "bool"].map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
           <input value={text} onChange={(e) => setText(e.target.value)} placeholder={type === "money" ? "1000 USD" : type === "percent" ? "8%" : ""} data-testid="setting-value" />
+          <span>for</span>
+          <select value={base} onChange={(e) => setBase(e.target.value)} data-testid="setting-for">
+            <option value="">the whole workspace</option>
+            {bases.map((b) => <option key={b.id} value={b.id}>the base {b.name}</option>)}
+          </select>
           <button onClick={save} disabled={!key.trim() || !text.trim()} data-testid="save-setting">Save</button>
         </div>
         {message && <div className="notice refused" data-testid="settings-message">{message}</div>}
       </div>
+      {selected && (
+        <div className="card" data-testid="setting-detail">
+          <h3><code>{selected.key}</code></h3>
+          <div className="form-row">
+            <span>Value for</span>
+            <select value={explainFor} onChange={(e) => setExplainFor(e.target.value)} data-testid="explain-for">
+              <option value="">the whole workspace</option>
+              {bases.map((b) => <option key={b.id} value={b.id}>the base {b.name}</option>)}
+            </select>
+          </div>
+          <div className="notice" data-testid="setting-explain">{explanation}</div>
+          <h4>History</h4>
+          <ul className="versions" data-testid="setting-history">
+            {selected.history.map((h, i) => (
+              <li key={i}>
+                <b>{h.value}</b> for {h.for} <span className="muted small">· {h.by} · {new Date(h.at).toISOString().slice(0, 16).replace("T", " ")}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

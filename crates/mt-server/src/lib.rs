@@ -18,6 +18,7 @@ pub mod formula;
 pub mod model;
 pub mod process;
 pub mod seed;
+pub mod settings;
 pub mod view;
 pub mod web;
 

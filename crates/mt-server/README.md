@@ -40,6 +40,7 @@ and the template gallery. Debug builds read `apps/web/dist` from disk.
 | `seed` | The demo: suppliers, purchase requests, request lines; seven people with different access; the request lifecycle and purchase approval; records created, submitted and approved through the real operations |
 | `builder` | Building a configuration: bases, tables, field editing and deletion (refused while formulas, lifecycles, approvals or access rules use the field), two-way links, code lists and items, settings for `PARAM`, people and groups, templates |
 | `design` | The process designer's format (states, buttons, approval steps with approvers and “only when” conditions, outcomes) and `publish`: compiles it into `mt-lifecycle` definitions, checks them (closed loop, field references), creates or reuses the state field, keeps approval versions |
+| `settings` | Settings with scopes: workspace values and base overrides in the `mt-refdata` registry, `PARAM` resolution by base, explanations and history |
 | `codelist` | Code lists with a history: changes committed or proposed through the `mt-refdata` ledger, decisions on proposals, versions and “as of” views |
 | `access` | The access builder: grants (who, what, where, which records and fields, limit, period, why), revocation, capability sets, separation-of-duties rules, access reviews, share links, the capability catalogue |
 | `process` | Lifecycles bound to tables, transitions, approvals (start, act, finish → state), approvers from the access policy, locks on frozen records and their lines, notices, and the views of tasks, approvals and the process design |
@@ -67,6 +68,10 @@ and the template gallery. Debug builds read `apps/web/dist` from disk.
   narrowing; confidential and protected fields and links to other tables are never shown;
   it stops working when it expires, is withdrawn, or its maker loses `share.manage`. The
   token (24 random bytes) is shown only to those who may manage access and never audited.
+* A setting has one type for good; it is set for the workspace and may be overridden per base
+  (with `settings.manage` on that base). A formula reads `PARAM` with its record's base, never
+  with a person. Every change is kept and each value is explained (which level applies, who
+  set it, when). Settings saved before scopes existed are carried over on load.
 * Every code-list change is a numbered version (`mt-refdata` ledger); a list can need a
   second person's approval, and then every change — switching approval off included — is a
   proposal someone else approves or rejects (with a reason). The history is stored next to
@@ -78,7 +83,7 @@ and the template gallery. Debug builds read `apps/web/dist` from disk.
 ## Tests
 
 `tests/api.rs` — 19 in-process API tests (every endpoint, as different people).
-`tests/builder.rs` — 20 tests that build the expense configuration of doc 14 (S3) from an empty
+`tests/builder.rs` — 21 tests that build the expense configuration of doc 14 (S3) from an empty
 workspace (base, tree code list, two tables, a two-way link, a roll-up, a formula reading a
 setting, people and groups), edit and delete safely, install the template, survive a restart,
 design the claim lifecycle and approval, give access (sets, scopes, a limit, separation of

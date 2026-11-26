@@ -655,9 +655,39 @@ test.describe.serial("build your own: expense claims from scratch", () => {
     await shot(page, "26-template-installed");
   });
 
+  test("a setting is overridden for one base, explained, and kept in its history", async () => {
+    await page.getByTestId("nav-settings").click();
+    await page.getByTestId("setting-key").fill("expense.manager_limit");
+    await page.getByTestId("setting-type").selectOption("money");
+    await page.getByTestId("setting-value").fill("2000 USD");
+    await page.getByTestId("setting-for").selectOption({ label: "the base Expenses" });
+    await page.getByTestId("save-setting").click();
+    await expect(page.getByTestId("override-expense.manager_limit-the base Expenses")).toContainText("Expenses: 2,000.00 USD");
+    await expect(page.getByTestId("setting-expense.manager_limit")).toContainText("500.00 USD");
+    // The claims of the Expenses base follow their base's limit.
+    await openTable(page, "Expense claims");
+    await expect(row(page, "Client visit Berlin")).toContainText("895.50 USD");
+    await expect(row(page, "Client visit Berlin")).not.toContainText("✓");
+    await page.getByTestId("nav-settings").click();
+    await page.getByTestId("setting-expense.manager_limit").click();
+    await page.getByTestId("explain-for").selectOption({ label: "the base Expenses" });
+    await expect(page.getByTestId("setting-explain")).toContainText("is 2,000.00 USD for the base Expenses: set for the base Expenses by Alice Admin on");
+    await page.getByTestId("explain-for").selectOption({ label: "the base Purchasing" });
+    await expect(page.getByTestId("setting-explain")).toContainText("for the base Purchasing, which has no value of its own: the value for the whole workspace applies (set by Alice Admin");
+    await expect(page.getByTestId("setting-history")).toContainText("2,000.00 USD for the base Expenses");
+    await expect(page.getByTestId("setting-history")).toContainText("500.00 USD for the whole workspace");
+    await shot(page, "33-settings-per-base");
+    // Removing the override brings the workspace value back.
+    await page.getByTestId("clear-expense.manager_limit-the base Expenses").click();
+    await expect(page.getByTestId("override-expense.manager_limit-the base Expenses")).toHaveCount(0);
+    await expect(page.getByTestId("setting-history")).toContainText("cleared for the base Expenses");
+    await openTable(page, "Expense claims");
+    await expect(row(page, "Client visit Berlin")).toContainText("✓");
+  });
+
   test("everything built is in the audit chain", async () => {
     await page.getByTestId("nav-audit").click();
-    for (const action of ["base.create", "refset.create", "table.create", "field.create", "setting.update", "member.create", "process.publish", "access.grant", "approval.approve", "access.review.complete", "share.create", "share.revoke", "refset.change.approve", "template.install"]) {
+    for (const action of ["base.create", "refset.create", "table.create", "field.create", "setting.update", "member.create", "process.publish", "access.grant", "approval.approve", "access.review.complete", "share.create", "share.revoke", "refset.change.approve", "setting.clear", "template.install"]) {
       await expect(page.getByTestId("audit-entries")).toContainText(action);
     }
     await page.getByTestId("verify").click();

@@ -106,6 +106,8 @@ pub struct FormulaEnv<'a> {
     pub ws: &'a Workspace,
     /// The current instant.
     pub now: Timestamp,
+    /// The base of the record being computed: settings resolve with its overrides.
+    pub base: Option<mt_core::id::BaseId>,
 }
 
 impl Env for FormulaEnv<'_> {
@@ -126,7 +128,16 @@ impl Env for FormulaEnv<'_> {
     }
 
     fn param(&self, key: &str) -> Option<Value> {
-        self.ws.data.params.get(key).cloned()
+        self.ws
+            .registry()
+            .value(
+                key,
+                &mt_refdata::ParamContext {
+                    base: self.base,
+                    user: None,
+                },
+            )
+            .cloned()
     }
 
     fn label(&self, item: RefItemId) -> Option<String> {

@@ -32,5 +32,5 @@ pub use ledger::{Ledger, Proposal, ProposalStatus, Revision};
 pub use model::{Aliases, ChangePolicy, Overlay, RefItem, RefSet, Relabel, SetScope, Structure};
 pub use params::{
     ParamContext, ParamDef, ParamKind, Registry, Resolved, Scope, ScopeLevel, SecretRef, Setting,
-    Source,
+    Source, StoredChange, StoredRegistry,
 };

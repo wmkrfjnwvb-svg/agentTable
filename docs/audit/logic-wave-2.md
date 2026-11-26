@@ -78,6 +78,12 @@ the link itself (fields left out, no classified or protected fields, no links in
 maker who loses `share.manage` breaks the link; a maker who loses sight of a field or record takes it
 out of the link (test `std_share_links_show_one_table_and_never_more_than_their_maker_sees`).
 
+**A formula computes the same for everyone.** Settings resolve for a formula with the base of its
+record and never with a person, so two people never see different computed values for one record;
+a base override changes exactly the records of that base (test
+`std_settings_are_overridden_per_base_explained_and_kept`: the 600 USD claim needs finance only while
+its base's limit is 300 USD).
+
 **Configurations cannot be broken by editing them.** A field used by a formula, lifecycle, approval or
 access rule cannot be deleted (the users are named); a table others link to cannot be deleted; a
 design that removes a state still holding records is refused; removed select choices are disabled,
@@ -90,5 +96,5 @@ never deleted, so records keep their values. Every building step is in the audit
 | One lock per workspace today; per-base single writer with fencing (wave 1) and the operation pipeline | 3 | Concurrent transitions on one record from two nodes: exactly one applies |
 | Re-resolve capability-named approvers when grants change (today: the old approver is refused, an administrator reassigns) | 5 | Rule-driven reassignment on grant change |
 | SLA clocks on states; overdue approvals ticked by the scheduler | 5 | Timer fires once after a crash between cursor move and fire (L1-05) |
-| Settings scopes in the product (R2-05) | 3 | Base/person overrides resolve and explain |
+| Person-level settings (preferences) on screen | 4 (identity) | A person's value never changes what a formula computes (formulas resolve without a person) |
 | Limits in another currency than the record | 6 (FX rates) | Convert with the rate of the record's date, or refuse with the reason |

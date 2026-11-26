@@ -28,7 +28,7 @@ Command line
 Build your own
 --------------
 A new workspace is empty: you are Alice Admin, who may do everything. Build a base the way
-the end-to-end test does (screenshots build-01 … build-32 on the release page):
+the end-to-end test does (screenshots build-01 … build-33 on the release page):
 
   1. Home → "Start from scratch": create a base, e.g. "Expenses".
   2. Code lists: a list of expense categories (a tree: Travel › Flights, Hotels; Meals).
@@ -60,6 +60,9 @@ the end-to-end test does (screenshots build-01 … build-32 on the release page)
  13. Code lists keep every version ("show" a past version as it was). Tick "Changes need a
      second person's approval": from then on a change is proposed and applies only when
      someone else approves it — turning this off needs approval too.
+ 14. Settings can differ per base: set expense.manager_limit "for the base Expenses" and the
+     formulas of that base follow; click a setting to see which value applies where, and why,
+     and every change made to it.
 
 Or install the purchasing sample from the template gallery on the Home page (or start with
 --demo): suppliers, purchase requests with lines, cost centres, approvals routed by limits

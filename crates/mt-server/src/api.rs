@@ -153,7 +153,11 @@ pub fn routes() -> Router<Shared> {
         .route("/api/refdata/{set}/items/{item}", patch(update_item))
         .route("/api/people/{person}", patch(update_person))
         .route("/api/settings", get(settings))
-        .route("/api/settings/{key}", put(set_setting))
+        .route(
+            "/api/settings/{key}",
+            put(set_setting).delete(clear_setting),
+        )
+        .route("/api/settings/{key}/explain", get(explain_setting))
         .route(
             "/api/tables/{table}/process",
             get(process_design).put(publish_process),
@@ -1062,7 +1066,11 @@ async fn check_formula(
                 table,
                 record,
             };
-            let env = crate::formula::FormulaEnv { ws: &ws, now };
+            let env = crate::formula::FormulaEnv {
+                ws: &ws,
+                now,
+                base: Some(table.base),
+            };
             let value = mt_formula::evaluate_to(&expr, &schema, &row, &env, None, data_type);
             let mut def = FieldDef::new(FieldId::from_u128(0), "preview", data_type);
             def.data_type = data_type;
@@ -1778,40 +1786,36 @@ async fn update_person(
 
 async fn settings(State(app): State<Shared>) -> Json<JsonValue> {
     let ws = app.ws.lock().await;
-    let list: Vec<JsonValue> = ws
-        .data
-        .params
-        .iter()
-        .map(|(key, value)| {
-            let kind = match value {
-                Value::Money(_) => "money",
-                Value::Percent(_) => "percent",
-                Value::Number(_) => "number",
-                Value::Bool(_) => "bool",
-                Value::Null
-                | Value::Text(_)
-                | Value::LongText(_)
-                | Value::Date(_)
-                | Value::DateTime(_)
-                | Value::Duration(_)
-                | Value::Reference(_)
-                | Value::MultiReference(_)
-                | Value::Link(_)
-                | Value::Principal(_)
-                | Value::Attachment(_)
-                | Value::Json(_) => "text",
-            };
-            let shown = value.data_type().map_or_else(String::new, |data_type| {
-                view::display(
-                    &ws,
-                    &FieldDef::new(FieldId::from_u128(1), key, data_type),
-                    value,
-                )
-            });
-            json!({"key": key, "type": kind, "value": shown})
-        })
-        .collect();
-    Json(json!(list))
+    Json(json!(crate::settings::list(&ws)))
+}
+
+#[derive(Debug, Deserialize)]
+struct SettingScope {
+    /// A base, for its override; the whole workspace without.
+    #[serde(default)]
+    base: Option<mt_core::id::BaseId>,
+}
+
+async fn clear_setting(
+    State(app): State<Shared>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+    Query(scope): Query<SettingScope>,
+) -> Reply {
+    let mut ws = app.ws.lock().await;
+    let actor = actor(&ws, &headers)?;
+    crate::settings::clear(&mut ws, actor, &key, scope.base, app.clock.now())?;
+    app.save(&ws)?;
+    Ok(Json(json!({"cleared": true})))
+}
+
+async fn explain_setting(
+    State(app): State<Shared>,
+    Path(key): Path<String>,
+    Query(scope): Query<SettingScope>,
+) -> Reply {
+    let ws = app.ws.lock().await;
+    Ok(Json(crate::settings::explain(&ws, &key, scope.base)?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1819,6 +1823,9 @@ struct SettingBody {
     #[serde(rename = "type")]
     kind: String,
     text: String,
+    /// A base, to override the workspace value there.
+    #[serde(default)]
+    base: Option<mt_core::id::BaseId>,
 }
 
 async fn set_setting(
@@ -1830,7 +1837,7 @@ async fn set_setting(
     let mut ws = app.ws.lock().await;
     let actor = actor(&ws, &headers)?;
     let value = crate::builder::param_value(&body.kind, &body.text)?;
-    crate::builder::set_param(&mut ws, actor, &key, value, app.clock.now())?;
+    crate::builder::set_param(&mut ws, actor, &key, value, body.base, app.clock.now())?;
     app.save(&ws)?;
     Ok(Json(json!({"updated": true})))
 }

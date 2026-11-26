@@ -503,6 +503,29 @@ impl Resolved<'_> {
     }
 }
 
+/// One kept change of a parameter, as stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredChange {
+    /// The parameter.
+    pub key: String,
+    /// Where it was changed.
+    pub scope: Scope,
+    /// The change.
+    pub entry: Entry,
+}
+
+/// A registry as stored: its definitions and every kept change (oldest first for each key
+/// and scope). [`Registry::from_stored`] checks it again on loading.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct StoredRegistry {
+    /// The definitions.
+    #[serde(default)]
+    pub definitions: Vec<ParamDef>,
+    /// The changes.
+    #[serde(default)]
+    pub changes: Vec<StoredChange>,
+}
+
 /// The parameters of one tenant: definitions and overrides with their history.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Registry {
@@ -664,6 +687,92 @@ impl Registry {
     fn current(&self, key: &str, scope: Scope) -> Option<(&Setting, &Entry)> {
         let entry = self.values.get(key)?.get(&scope)?.last()?;
         entry.setting.as_ref().map(|setting| (setting, entry))
+    }
+
+    /// The registry in its stored form.
+    #[must_use]
+    pub fn to_stored(&self) -> StoredRegistry {
+        let changes = self
+            .values
+            .iter()
+            .flat_map(|(key, scopes)| {
+                scopes.iter().flat_map(move |(scope, entries)| {
+                    entries.iter().map(move |entry| StoredChange {
+                        key: key.clone(),
+                        scope: *scope,
+                        entry: entry.clone(),
+                    })
+                })
+            })
+            .collect();
+        StoredRegistry {
+            definitions: self.defs.values().cloned().collect(),
+            changes,
+        }
+    }
+
+    /// Loads a stored registry, checking it as if it were built again: every definition is
+    /// valid and defined once, every change names a defined parameter, and every override
+    /// in force is at an allowed level and valid under its definition.
+    ///
+    /// # Errors
+    /// The first problem found; nothing is loaded.
+    pub fn from_stored(
+        stored: StoredRegistry,
+        resolver: &dyn OptionResolver,
+    ) -> Result<Registry, RefDataError> {
+        let mut registry = Registry::new();
+        for def in stored.definitions {
+            if registry.defs.contains_key(&def.key) {
+                return Err(def.invalid("it is defined twice"));
+            }
+            registry.define(def, resolver)?;
+        }
+        for change in stored.changes {
+            registry.def(&change.key)?;
+            registry.push(&change.key, change.scope, change.entry);
+        }
+        for (key, scopes) in &registry.values {
+            let def = registry.def(key)?;
+            for (scope, entries) in scopes {
+                let Some(setting) = entries.last().and_then(|entry| entry.setting.as_ref()) else {
+                    continue;
+                };
+                if !def.overridable_at.contains(&scope.level()) {
+                    return Err(RefDataError::ScopeNotAllowed {
+                        key: clip(key),
+                        scope: scope.level().name(),
+                    });
+                }
+                match setting {
+                    Setting::Value(value) => def.check_value(value, resolver)?,
+                    Setting::Secret(_) => {
+                        if !def.is_secret() {
+                            return Err(def.invalid("only secret parameters take a secret handle"));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(registry)
+    }
+
+    /// The scopes at which a parameter is set now, with what sets it there, in scope order
+    /// (tenant, then bases, then people).
+    #[must_use]
+    pub fn overrides(&self, key: &str) -> Vec<(Scope, &Setting, &Entry)> {
+        self.values
+            .get(key)
+            .into_iter()
+            .flatten()
+            .filter_map(|(scope, entries)| {
+                let entry = entries.last()?;
+                entry
+                    .setting
+                    .as_ref()
+                    .map(|setting| (*scope, setting, entry))
+            })
+            .collect()
     }
 
     /// The changes made to a parameter at a scope, oldest first.
