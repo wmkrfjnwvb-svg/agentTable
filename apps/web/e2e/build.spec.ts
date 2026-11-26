@@ -485,6 +485,43 @@ test.describe.serial("build your own: expense claims from scratch", () => {
     await page.getByTestId("user-select").selectOption({ label: "Alice Admin — Workspace administrator" });
   });
 
+  test("a receipt is required only when the total is above 300 USD", async () => {
+    await openTable(page, "Expense claims");
+    await addField(page, "url", "Receipt");
+    await page.getByTestId("head-Receipt").click();
+    await page.getByTestId("required-when-add").click();
+    await page.getByTestId("required-when-field").selectOption({ label: "Total" });
+    await page.getByTestId("required-when-op").selectOption("gt");
+    await page.getByTestId("required-when-value").fill("300 USD");
+    await page.getByTestId("save-field").click();
+    await expect(page.getByTestId("field-editor")).toBeHidden();
+    await page.getByTestId("new-record").click();
+    await page.getByTestId("edit-Trip purpose").fill("Conference Lisbon");
+    await page.getByTestId("save").click();
+    await expect(page.getByTestId("panel-message")).toHaveText("Saved.");
+    await page.getByTestId("close-panel").click();
+    await openTable(page, "Expense lines");
+    await page.getByTestId("new-record").click();
+    await page.getByTestId("edit-Description").fill("Conference ticket");
+    await page.getByTestId("edit-Amount").fill("450");
+    await page.getByTestId("edit-Claim").selectOption({ label: "Conference Lisbon" });
+    await page.getByTestId("save").click();
+    await expect(page.getByTestId("panel-message")).toHaveText("Saved.");
+    await page.getByTestId("close-panel").click();
+    await openTable(page, "Expense claims");
+    await row(page, "Conference Lisbon").click();
+    await expect(page.getByTestId("required-when-Receipt")).toContainText("Required when “Total” > 300.00 USD");
+    await expect(page.getByTestId("transition-submit")).toBeDisabled();
+    await expect(page.getByTestId("why-submit")).toContainText("“Receipt” is required for this record");
+    await shot(page, "28-required-when");
+    await page.getByTestId("edit-Receipt").fill("https://receipts.example/lisbon");
+    await page.getByTestId("save").click();
+    await expect(page.getByTestId("panel-message")).toHaveText("Saved.");
+    await page.getByTestId("transition-submit").click();
+    await expect(page.getByTestId("state")).toHaveText("Submitted");
+    await page.getByTestId("close-panel").click();
+  });
+
   test("a template installs next to what was built", async () => {
     await page.getByTestId("nav-home").click();
     await page.getByTestId("install-purchasing").click();

@@ -1891,3 +1891,132 @@ async fn invalid_step_designs_are_refused() {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{what}: {body}");
     }
 }
+
+#[tokio::test]
+async fn std_fields_required_only_when_a_condition_holds() {
+    let app = empty();
+    let x = build(&app).await;
+    let p = people(&app).await;
+    let receipt = field(&app, &x.claims, json!({"type": "url", "name": "Receipt"})).await;
+    let patch = |body: Value| {
+        let app = app.clone();
+        let path = format!("/api/tables/{}/fields/{receipt}", x.claims);
+        async move { call(&app, Method::PATCH, &path, Some(ALICE), Some(body)).await }
+    };
+    let (status, table) =
+        patch(json!({"requiredWhen": {"field": x.total, "op": "gt", "text": "500 USD"}})).await;
+    assert_eq!(status, StatusCode::OK, "{table}");
+    let column = table["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "Receipt")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        column["requiredWhen"]["text"], "500 USD",
+        "it round-trips for editing"
+    );
+    assert_eq!(column["requiredWhenText"], "“Total” > 500.00 USD");
+    // A claim without lines needs no receipt; with 600 USD of lines it does.
+    let purpose = columns_id(&app, &x.claims, "Purpose").await;
+    let (status, claim) = post(
+        &app,
+        &format!("/api/tables/{}/records", x.claims),
+        json!({"cells": {&purpose: {"text": "Fair"}}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let claim_id = claim["id"].as_str().unwrap().to_owned();
+    let description = columns_id(&app, &x.lines, "Description").await;
+    post(&app, &format!("/api/tables/{}/records", x.lines), json!({"cells": {&description: {"text": "Stand"}, &x.amount: {"text": "600"}, &x.claim_link: {"value": {"type": "link", "value": [claim_id]}}}})).await;
+    let path = format!("/api/tables/{}/records/{claim_id}", x.claims);
+    let (status, body) = call(
+        &app,
+        Method::PATCH,
+        &path,
+        Some(ALICE),
+        Some(json!({"cells": {&purpose: {"text": "Fair Paris"}}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["details"][0]["field"], receipt.as_str());
+    assert_eq!(
+        body["details"][0]["message"],
+        "`Receipt` is required for this record"
+    );
+    // Moving forward needs it too.
+    call(
+        &app,
+        Method::PUT,
+        &format!("/api/tables/{}/process", x.claims),
+        Some(ALICE),
+        Some(design(&x, &p)),
+    )
+    .await;
+    let (status, body) = call(
+        &app,
+        Method::POST,
+        &format!("{path}/transitions/submit"),
+        Some(ALICE),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["details"][0], "“Receipt” is required for this record");
+    let (_, record) = call(&app, Method::GET, &path, Some(ALICE), None).await;
+    let submit = record["process"]["transitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["key"] == "submit")
+        .unwrap()
+        .clone();
+    assert_eq!(submit["allowed"], false);
+    let (status, _) = call(&app, Method::PATCH, &path, Some(ALICE), Some(json!({"cells": {&purpose: {"text": "Fair Paris"}, &receipt: {"text": "https://receipts.example/fair"}}}))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = call(
+        &app,
+        Method::POST,
+        &format!("{path}/transitions/submit"),
+        Some(ALICE),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Removing the condition; refusals.
+    let (status, table) = patch(json!({"requiredWhen": null})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(table["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "Receipt")
+        .unwrap()["requiredWhen"]
+        .is_null());
+    let (status, _) =
+        patch(json!({"requiredWhen": {"field": receipt, "op": "is_empty", "text": ""}})).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "not by its own value"
+    );
+    let (status, _) = patch(json!({"requiredWhen": {"field": "fld_0000000000000000000000000z", "op": "eq", "text": "1"}})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _) =
+        patch(json!({"requiredWhen": {"field": x.total, "op": "gt", "text": "lots"}})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _) = call(
+        &app,
+        Method::PATCH,
+        &format!("/api/tables/{}/fields/{}", x.claims, x.total),
+        Some(ALICE),
+        Some(json!({"requiredWhen": {"field": receipt, "op": "is_not_empty", "text": ""}})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "computed fields fill themselves"
+    );
+}

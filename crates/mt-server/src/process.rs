@@ -552,6 +552,21 @@ fn running_run(ws: &Workspace, table: TableId, record: RecordId) -> Option<usize
         .position(|r| r.table == table && r.record == record && !r.approval.status.is_final())
 }
 
+/// Whether entering a state moves the record forward (in progress, waiting, approval, done).
+fn moves_forward(binding: &Binding, to: &str) -> bool {
+    binding
+        .lifecycle
+        .state(to)
+        .is_some_and(|s| match s.category {
+            StateCategory::InProgress
+            | StateCategory::WaitingInternal
+            | StateCategory::WaitingExternal
+            | StateCategory::PendingApproval
+            | StateCategory::DoneSuccess => true,
+            StateCategory::New | StateCategory::DoneFailure | StateCategory::Cancelled => false,
+        })
+}
+
 /// Takes a transition for a person.
 ///
 /// # Errors
@@ -609,6 +624,27 @@ pub fn transition(
                 ))
             }
         })?;
+    // Fields a condition makes required must be filled before the record moves forward
+    // (withdrawing, cancelling or rejecting needs no receipt).
+    let missing = if moves_forward(binding, &transition.to) {
+        ws.conditional_missing(table, &record.cells, now)
+    } else {
+        Vec::new()
+    };
+    if !missing.is_empty() {
+        let reasons: Vec<String> = missing
+            .iter()
+            .map(|f| format!("“{}” is required for this record", field_name(table, *f)))
+            .collect();
+        return Err(ApiError {
+            details: json!(reasons),
+            ..ApiError::conflict(format!(
+                "“{}” is not possible now: {}",
+                transition.name,
+                reasons.join("; ")
+            ))
+        });
+    }
     let label = transition.name.clone();
     let requester = record.created_by;
     let leaving_approval = binding
@@ -1296,6 +1332,7 @@ pub fn record_json(
     let ctx = context(now);
     let lookup = |field: FieldId| record.cells.get(&field);
     let prior = ws.prior(actor, Some(record));
+    let conditional = ws.conditional_missing(table, &record.cells, now);
     let offers: Vec<Json> = binding
         .lifecycle
         .offers(&current, &lookup, &ctx, &|_| true)
@@ -1322,6 +1359,15 @@ pub fn record_json(
                 .iter()
                 .map(|b| blocker_text(ws, binding, table, transition, b))
                 .collect();
+            for field in conditional
+                .iter()
+                .filter(|_| moves_forward(binding, &transition.to))
+            {
+                reasons.push(format!(
+                    "“{}” is required for this record",
+                    field_name(table, *field)
+                ));
+            }
             if !decision.allowed {
                 reasons.push(match &transition.capability {
                     Some(key) => format!("{} may not “{key}” here", ws.name_of(actor.principal)),

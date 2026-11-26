@@ -232,6 +232,7 @@ export default function RecordPanel({
                 {column.computed && <span className="fx">ƒ</span>}
                 {column.name}
                 {column.required && <span className="req">*</span>}
+                {!column.required && column.requiredWhenText && <span className="req" title={`Required when ${column.requiredWhenText}`}>*?</span>}
                 <span className="type-tag">{column.typeLabel}</span>
               </div>
               <div className="field-value">
@@ -243,6 +244,7 @@ export default function RecordPanel({
                   </span>
                 )}
                 {column.formula && <div className="formula small">= {column.formula}</div>}
+                {!column.required && column.requiredWhenText && <div className="small muted" data-testid={`required-when-${column.name}`}>Required when {column.requiredWhenText}</div>}
                 {!editable && column.lockedReason && canEdit && !column.generated && !column.computed && <div className="locked small">🔒 {column.lockedReason}</div>}
                 {errors[column.id] && <div className="field-error" data-testid="field-error">{errors[column.id]}</div>}
               </div>

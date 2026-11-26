@@ -57,16 +57,20 @@ and the template gallery. Debug builds read `apps/web/dist` from disk.
   refused writes leave no trace in data or log.
 * An agent acting for a person gets the intersection of both: rows, fields and actions.
 * Mirrored link fields (a request's lines, a line's request) stay in step.
+* A field “required only when …” must be filled in whenever its condition holds: saving is
+  refused (422, naming the field), and so is every transition that moves the record forward;
+  withdrawing, rejecting and cancelling are never blocked by it.
 
 ## Tests
 
 `tests/api.rs` — 19 in-process API tests (every endpoint, as different people).
-`tests/builder.rs` — 11 tests that build the expense configuration of doc 14 (S3) from an empty
+`tests/builder.rs` — 15 tests that build the expense configuration of doc 14 (S3) from an empty
 workspace (base, tree code list, two tables, a two-way link, a roll-up, a formula reading a
 setting, people and groups), edit and delete safely, install the template, survive a restart,
 design the claim lifecycle and approval, give access (sets, scopes, a limit, separation of
 duties, revocation), run the process as the employee, the manager and finance, keep running
-approvals on their version, and refuse every malformed or unauthorised step.
+approvals on their version, run quorum steps, parallel branches, fill-in steps and timeouts,
+enforce fields required only when a condition holds, and refuse every malformed or unauthorised step.
 `tests/process.rs` — 9 tests of lifecycles and approvals through the API: the seeded requests'
 history, submit → approve → order, the CFO step and sending back, rejection, revision,
 withdrawal, cancellation and deletion rules, every refused transition with its reasons, acts

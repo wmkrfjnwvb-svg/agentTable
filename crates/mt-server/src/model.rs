@@ -802,6 +802,48 @@ impl Workspace {
         }
     }
 
+    /// Fields a condition makes required for a record with these values, left empty. Computed
+    /// fields take their current values (a total changes through other records: transitions
+    /// check again before a record moves on).
+    #[must_use]
+    pub fn conditional_missing(
+        &self,
+        table: &Table,
+        cells: &BTreeMap<FieldId, Value>,
+        now: Timestamp,
+    ) -> Vec<FieldId> {
+        let ctx = context(now);
+        let lookup = |field: FieldId| cells.get(&field);
+        table
+            .fields
+            .iter()
+            .filter(|f| f.validation.required_when.is_some())
+            .filter(|f| {
+                let value = cells.get(&f.id).cloned().unwrap_or(Value::Null);
+                !mt_core::validate::validate_required_when(f, &value, &lookup, &ctx).is_empty()
+            })
+            .map(|f| f.id)
+            .collect()
+    }
+
+    fn require_conditional(
+        &self,
+        table: &Table,
+        cells: &BTreeMap<FieldId, Value>,
+        now: Timestamp,
+    ) -> ApiResult<()> {
+        let missing = self.conditional_missing(table, cells, now);
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let issues: Vec<serde_json::Value> = missing
+            .iter()
+            .filter_map(|id| table.field(*id))
+            .map(|f| json!({"field": f.id, "message": format!("`{}` is required for this record", f.name)}))
+            .collect();
+        Err(ApiError::invalid("some values are missing", json!(issues)))
+    }
+
     /// Writes the fields of a fill-in task: exactly `allowed`, whatever the record's state and
     /// the assignee's own rights (the task is the right). Validated like any change; audited.
     ///
@@ -899,6 +941,8 @@ impl Workspace {
         if !issues.is_empty() {
             return Err(ApiError::invalid("some values are missing", json!(issues)));
         }
+        let proposed: BTreeMap<FieldId, Value> = values.iter().cloned().collect();
+        self.require_conditional(table, &proposed, now)?;
         let requester: Vec<FieldId> = table
             .fields
             .iter()
@@ -1006,6 +1050,15 @@ impl Workspace {
             .cloned()
             .collect();
         crate::process::guard_update(self, table, record, &changed)?;
+        let mut proposed = record.cells.clone();
+        for (field, value) in &changed {
+            if value.is_empty() {
+                proposed.remove(field);
+            } else {
+                proposed.insert(*field, value.clone());
+            }
+        }
+        self.require_conditional(table, &proposed, now)?;
         let mut links = Vec::new();
         {
             let table = self.table_mut(table_id)?;

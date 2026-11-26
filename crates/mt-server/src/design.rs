@@ -236,6 +236,47 @@ fn unique(base: String, taken: &mut BTreeSet<String>) -> String {
 }
 
 /// The typed value of a simple condition.
+/// The typed-in form of a single comparison, for editing it again (`None` for other shapes).
+#[must_use]
+pub fn simple_of(condition: &Condition) -> Option<SimpleCondition> {
+    let Condition::Test(test) = condition else {
+        return None;
+    };
+    let text = match &test.operand {
+        Operand::None => String::new(),
+        Operand::Value(value) => match value {
+            Value::Bool(b) => if *b { "yes" } else { "no" }.to_owned(),
+            Value::Number(n) | Value::Percent(n) => mt_core::decimal::canonical_string(n),
+            Value::Money(m) => format!(
+                "{} {}",
+                mt_core::decimal::canonical_string(&m.amount()),
+                m.currency()
+            ),
+            Value::Text(t) | Value::LongText(t) => t.clone(),
+            Value::Date(d) => d.to_string(),
+            Value::Reference(id) => id.to_string(),
+            Value::Null
+            | Value::DateTime(_)
+            | Value::Duration(_)
+            | Value::MultiReference(_)
+            | Value::Link(_)
+            | Value::Principal(_)
+            | Value::Attachment(_)
+            | Value::Json(_) => return None,
+        },
+        Operand::List(_)
+        | Operand::Range(..)
+        | Operand::Field(_)
+        | Operand::Me
+        | Operand::Period(_) => return None,
+    };
+    Some(SimpleCondition {
+        field: test.field,
+        op: test.op,
+        text,
+    })
+}
+
 /// Compiles a simple condition against a table's fields.
 ///
 /// # Errors

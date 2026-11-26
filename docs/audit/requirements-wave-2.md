@@ -57,7 +57,7 @@ lines (gate 98%).
 | Formats, validation library | wave 1 | Met |
 | Field library; “updates propagate or stay pinned” | `FieldLibraryItem::differences` detects drift | Engine; propagation as an operation: wave 3 |
 | Status enabled / disabled / deprecated; “disabling never deletes data” | wave 1; select choices removed in the product are disabled, values kept (`builder::update_field`) | Met |
-| Conditional validation (`required_when`) | `validate_required_when` | Engine; not enforced by the product yet (R2-12) |
+| Conditional validation (`required_when`) | `validate_required_when` | Met: the field editor sets “required only when …”; saving and moving forward in a process are refused while the condition holds and the field is empty (R2-12) |
 
 ### 2.4 C3 reference data and C4 settings — `mt-refdata`
 
@@ -135,11 +135,11 @@ lines (gate 98%).
 | R2-05 | — | Settings in the product are tenant-wide values only; the engine's scopes, history and explain are not used yet | **Deferred to wave 3** with storage (settings per base and person need it) |
 | R2-06 | — | Code-list changes in the product bypass the versioned ledger (no history, no four eyes) | **Deferred to wave 3** (the ledger is stored with the store) |
 | R2-07 | — | SLA clocks and calendars are not attached to lifecycle states yet | **Deferred to wave 5** (timers need the job queue with leases, wave 3) |
-| R2-08 | — | The designer does not offer quorum, parallel blocks, fill-in steps or timeouts, which the engine has | **Next builder increment** |
+| R2-08 | — | The designer does not offer quorum, parallel blocks, fill-in steps or timeouts, which the engine has | **Fixed**: all four in the designer; test `std_quorum_parallel_fill_in_and_timeouts`; browser steps build-21 … build-25 |
 | R2-09 | — | The Access page does not offer field access, validity, share links or reviews, which the engine has | **Next builder increment** |
 | R2-10 | — | Query results on the three databases | **Wave 3** (SQL compiler compared with `mt-query::run`) |
 | R2-11 | — | Full recompute after each change | **Wave 3** (`mt-ops`, incremental from the dependency graph) |
-| R2-12 | — | `required_when` is not enforced by the product and has no editor | **Next builder increment** |
+| R2-12 | — | `required_when` is not enforced by the product and has no editor | **Fixed**: editor, enforcement on save and on forward transitions (withdraw / cancel are never blocked); test `std_fields_required_only_when_a_condition_holds`; browser step build-28 |
 
 ## 5. Definition of done (doc 21 §6)
 

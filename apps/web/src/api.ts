@@ -27,6 +27,8 @@ export type Column = {
   editable: boolean;
   lockedReason?: string;
   options?: { id: string; label: string; enabled: boolean }[] | null;
+  requiredWhen?: { field: string; op: string; text: string } | null;
+  requiredWhenText?: string | null;
   cell?: Cell;
 };
 
@@ -194,7 +196,7 @@ export type BaseSummary = {
 };
 export type Setting = { key: string; type: string; value: string };
 export type Template = { key: string; name: string; description: string; installed: boolean };
-export type FieldPatch = { name?: string; required?: boolean; help?: string; options?: { id?: string; label: string }[] };
+export type FieldPatch = { name?: string; required?: boolean; help?: string; options?: { id?: string; label: string }[]; requiredWhen?: { field: string; op: string; text: string } | null };
 export type Option = { value: Value | string; label: string; color?: string; path?: string; depth?: number };
 
 export type ApiError = { status: number; code: string; message: string; details?: unknown };

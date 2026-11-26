@@ -290,7 +290,7 @@ export default function TablePage({ tableId, onChanged }: { tableId: string; onC
         />
       )}
       {picking && <FieldPicker tableId={tableId} onClose={() => setPicking(false)} onCreated={() => { setPicking(false); load(); onChanged(); }} />}
-      {editing && <FieldEditor tableId={tableId} column={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); onChanged(); }} />}
+      {editing && <FieldEditor tableId={tableId} column={editing} columns={columns} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); onChanged(); }} />}
     </div>
   );
 }

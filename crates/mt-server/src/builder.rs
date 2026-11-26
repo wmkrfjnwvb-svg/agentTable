@@ -470,6 +470,16 @@ pub struct FieldPatch {
     /// records keep their values.
     #[serde(default)]
     pub options: Option<Vec<OptionPatch>>,
+    /// Required only when a condition holds (`null` removes the condition).
+    #[serde(default, rename = "requiredWhen", deserialize_with = "present")]
+    pub required_when: Option<serde_json::Value>,
+}
+
+/// Keeps an explicit `null` (as `Some(Value::Null)`), so it can be told apart from "left out".
+fn present<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    serde::Deserialize::deserialize(deserializer).map(Some)
 }
 
 /// One choice in a [`FieldPatch`].
@@ -589,6 +599,32 @@ pub fn update_field(
         }
         changes.push(json!({"what": "choices", "to": next.iter().filter(|o| o.enabled).map(|o| o.label.clone()).collect::<Vec<_>>()}));
         field.options = OptionsSource::Inline { options: next };
+    }
+    if let Some(wanted) = &patch.required_when {
+        if wanted.is_null() {
+            if field.validation.required_when.take().is_some() {
+                changes.push(json!({"what": "required when", "to": null}));
+            }
+        } else {
+            if field.is_generated() {
+                return Err(ApiError::invalid(
+                    "computed and system fields fill themselves",
+                    json!(null),
+                ));
+            }
+            let simple: crate::design::SimpleCondition = serde_json::from_value(wanted.clone())
+                .map_err(|e| ApiError::invalid(format!("required when: {e}"), json!(null)))?;
+            if simple.field == field_id {
+                return Err(ApiError::invalid(
+                    "a field cannot be required because of its own value",
+                    json!(null),
+                ));
+            }
+            let table = ws.table(table_id)?;
+            let condition = crate::design::condition(table, &simple)?;
+            changes.push(json!({"what": "required when", "to": crate::process::condition_text(ws, table, &condition)}));
+            field.validation.required_when = Some(condition);
+        }
     }
     field
         .check()

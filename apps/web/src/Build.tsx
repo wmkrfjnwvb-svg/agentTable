@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, BaseSummary, Column, Person, Setting, Template } from "./api";
+import { ConditionEditor, FieldInfo, When } from "./Designer";
 
 // Building: the pages where people assemble their own configuration from the components —
 // bases and tables, the template gallery, people and groups, settings, and the field editor.
@@ -379,9 +380,14 @@ export function SettingsPage() {
 
 // ------------------------------------------------------------------- the field editor
 
-export function FieldEditor({ tableId, column, onClose, onSaved }: { tableId: string; column: Column; onClose: () => void; onSaved: () => void }) {
+export function FieldEditor({ tableId, column, columns, onClose, onSaved }: { tableId: string; column: Column; columns: Column[]; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState(column.name);
   const [required, setRequired] = useState(column.required);
+  const [when, setWhen] = useState<When | null>(column.requiredWhen ?? null);
+  const others: FieldInfo[] = columns
+    .filter((c) => c.id !== column.id)
+    .map((c) => ({ id: c.id, name: c.name, dataType: c.dataType, type: c.type, generated: c.generated, options: c.options ? c.options.filter((o) => o.enabled) : null }));
+  const whenChanged = JSON.stringify(when) !== JSON.stringify(column.requiredWhen ?? null);
   const [help, setHelp] = useState(column.help ?? "");
   const [choices, setChoices] = useState(
     (column.options ?? []).filter((o) => o.enabled).map((o) => ({ id: o.id as string | undefined, label: o.label })),
@@ -395,6 +401,7 @@ export function FieldEditor({ tableId, column, onClose, onSaved }: { tableId: st
         required: required !== column.required ? required : undefined,
         help: help !== (column.help ?? "") ? help : undefined,
         options: column.options ? choices.filter((c) => c.label.trim()) : undefined,
+        requiredWhen: whenChanged ? when : undefined,
       });
       onSaved();
     } catch (e) {
@@ -427,6 +434,12 @@ export function FieldEditor({ tableId, column, onClose, onSaved }: { tableId: st
             <label className="inline">
               <input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} data-testid="edit-field-required" /> Required
             </label>
+          )}
+          {!column.generated && !required && (
+            <div className="row wrap" data-testid="required-when">
+              <span className="small muted">Required</span>
+              <ConditionEditor when={when} fields={others} onChange={setWhen} testId="required-when" />
+            </div>
           )}
           <label>
             Help text

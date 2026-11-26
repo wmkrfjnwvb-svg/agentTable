@@ -28,7 +28,7 @@ Command line
 Build your own
 --------------
 A new workspace is empty: you are Alice Admin, who may do everything. Build a base the way
-the end-to-end test does (screenshots build-01 … build-22 on the release page):
+the end-to-end test does (screenshots build-01 … build-28 on the release page):
 
   1. Home → "Start from scratch": create a base, e.g. "Expenses".
   2. Code lists: a list of expense categories (a tree: Travel › Flights, Hotels; Meals).
@@ -40,7 +40,8 @@ the end-to-end test does (screenshots build-01 … build-22 on the release page)
      {Total} > PARAM("expense.manager_limit").
   6. People & groups: add the people who will use it.
   7. Enter a claim and its lines; watch the total and the formula follow. Click a column
-     header to rename a field, make it required, edit its choices or delete it.
+     header to rename a field, make it required (or required only when a condition holds:
+     a Receipt when the Total is above 300 USD), edit its choices or delete it.
   8. "Process" on the claims table: states (Draft, Submitted waiting for approval and locked,
      Approved, Paid, Rejected), buttons (Submit, Pay — only for whoever may "expense.pay" —,
      Revise, Withdraw) and the approval: Max approves, finance reviews only when "Needs

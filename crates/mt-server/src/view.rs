@@ -196,6 +196,8 @@ pub fn field(
             .map(|o| json!({"id": o.id, "label": o.label, "enabled": o.enabled}))
             .collect::<Vec<_>>()),
         "maxItems": field.validation.max_items,
+        "requiredWhen": field.validation.required_when.as_ref().and_then(crate::design::simple_of),
+        "requiredWhenText": field.validation.required_when.as_ref().map(|c| crate::process::condition_text(ws, table, c)),
         "visibility": permission.map(|p| match p.visibility {
             Visibility::Visible => "visible",
             Visibility::Masked => "masked",
