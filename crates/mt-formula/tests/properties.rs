@@ -210,7 +210,9 @@ proptest! {
             let reread = evaluate(&parsed, &Orders, &record, &UTC);
             prop_assert_eq!(original, reread, "`{}`", text);
         }
-        // From here on the text is stable (a hand-built tree may print `-0` once).
+        // From here on the text is stable (a hand-built tree may print `-0` once, which reads
+        // back as `0`). Regression: `--0` read as `-(0)` once printed as `-0`, which read back
+        // as `0` — a different formula.
         let normal = parsed.to_text(&Orders);
         let again = parse(&normal, &Orders);
         prop_assert!(again.is_ok(), "`{}` does not parse: {:?}", normal, again);

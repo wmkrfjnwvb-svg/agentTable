@@ -139,6 +139,7 @@ lines (gate 98%).
 | R2-09 | — | The Access page does not offer field access, validity, share links or reviews, which the engine has | **Fixed**: grants on a table take “only” / “all but” fields and a period; reviews (open on a place, keep / revoke with a note, complete revokes, cancel) and read-only share links (a record or a table, fields left out, expiry, withdrawal, an anonymous page). Tests `std_grants_limited_to_fields_and_to_a_period`, `std_access_reviews_keep_or_revoke_with_a_note`, `std_share_links_show_one_table_and_never_more_than_their_maker_sees`, `edge_share_links_expire`; browser steps build-29 … build-31 |
 | R2-10 | — | Query results on the three databases | **Wave 3** (SQL compiler compared with `mt-query::run`) |
 | R2-11 | — | Full recompute after each change | **Wave 3** (`mt-ops`, incremental from the dependency graph) |
+| R2-13 | Medium | The CI coverage step piped `cargo llvm-cov` into `tee` without `pipefail`, so a failing test did not fail the step; the 98 % gate then judged a partial run (it failed, but for the wrong reason) | **Fixed**: the step runs with `shell: bash` (pipefail); the failing test was a real counterexample (L2-14) |
 | R2-12 | — | `required_when` is not enforced by the product and has no editor | **Fixed**: editor, enforcement on save and on forward transitions (withdraw / cancel are never blocked); test `std_fields_required_only_when_a_condition_holds`; browser step build-28 |
 
 ## 5. Definition of done (doc 21 §6)

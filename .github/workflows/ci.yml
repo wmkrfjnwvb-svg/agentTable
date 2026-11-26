@@ -79,6 +79,9 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - name: Line coverage per file and in total
+        # `shell: bash` runs with pipefail: a failing test fails this step instead of
+        # leaving the gates below to judge a partial run.
+        shell: bash
         run: |
           cargo llvm-cov --workspace --locked --summary-only | tee coverage.txt
           {

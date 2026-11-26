@@ -560,7 +560,16 @@ impl Expr {
                         out.push('(');
                     }
                     out.push('-');
-                    operand.print(names, UNARY_PRECEDENCE, out);
+                    // `-5` reads back as the number minus five, not as the negation of five:
+                    // a negated number keeps its parentheses, so the text reads back as the
+                    // same formula (`-(0)` would otherwise become `0`).
+                    if let Expr::Number(n) = operand.as_ref() {
+                        out.push('(');
+                        out.push_str(&canonical_string(n));
+                        out.push(')');
+                    } else {
+                        operand.print(names, UNARY_PRECEDENCE, out);
+                    }
                     if wrap {
                         out.push(')');
                     }
