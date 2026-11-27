@@ -164,6 +164,7 @@ pub struct Table {
     #[serde(default)]
     pub groups: Vec<FieldGroup>,
     /// The records, in creation order.
+    #[serde(default)]
     pub records: Vec<Record>,
 }
 

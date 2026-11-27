@@ -528,6 +528,8 @@ fn apply_move(
         record.modified_at = now;
         record.version = record.version.saturating_add(1);
     }
+    // Formulas reading the state, and "changed by / at", follow at once.
+    ws.recompute(now);
     let title = ws.title(table_id, record_id);
     ws.audit(
         actor,

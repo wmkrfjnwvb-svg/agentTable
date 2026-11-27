@@ -23,5 +23,5 @@ pub use dialect::Dialect;
 pub use documents::Document;
 pub use error::{StoreError, StoreResult};
 pub use jobs::{Job, JobState, Lease, NewJob};
-pub use records::Records;
+pub use records::{Batch, DocumentWrite, Records, WriteSet};
 pub use store::{int, uint, SharedStore, Store, StoreConfig, Tenant, TenantInfo};

@@ -16,14 +16,28 @@ The browser opens at http://127.0.0.1:8080. Stop the server with Ctrl+C in its w
 
 Command line
 ------------
-  agenttable [--port 8080] [--host 127.0.0.1] [--data agenttable-data.json] [--fresh] [--demo] [--open]
+  agenttable [--port 8080] [--host 127.0.0.1] [--database URL] [--import FILE.json]
+             [--data FILE.json] [--fresh] [--demo] [--open]
 
-  --port    another port, if 8080 is taken
-  --host    0.0.0.0 to reach it from other machines on your network (no real sign-in yet!)
-  --data    where the data is kept (created on first start)
-  --fresh   start over (the data file is replaced)
-  --demo    a new workspace starts with the purchasing sample installed
-  --open    open the browser
+  --port      another port, if 8080 is taken
+  --host      0.0.0.0 to reach it from other machines on your network (no real sign-in yet!)
+  --database  where the workspace is kept. Default: sqlite://agenttable-data (SQLite files in
+              the folder agenttable-data next to the program). A server works too:
+                mysql://user:password@host:3306/mysql          (MySQL 8)
+                postgres://user:password@host:5432/postgres    (PostgreSQL 14 or later)
+              The server creates its own databases there (mt_control, mt_t_…), so the user
+              needs the right to create databases.
+  --import    put a workspace saved as JSON (an earlier version's agenttable-data.json) into
+              a new database. An agenttable-data.json next to the program is carried over
+              by itself the first time.
+  --data      keep the workspace in a JSON file instead of a database (as earlier versions)
+  --fresh     start over (the stored workspace is deleted)
+  --demo      a new workspace starts with the purchasing sample installed
+  --open      open the browser
+
+Every change to records is stored as a numbered batch in the database's journal, next to
+the records themselves. Two servers must not share one database: the one started last takes
+it over, and the other one refuses further changes (it says so) instead of overwriting.
 
 Build your own
 --------------
@@ -78,7 +92,6 @@ to become another person:
   Purchasing assistant (AI agent) — acting for someone, sees exactly what they see
 
 Not built yet (shown as placeholders): automations, email/chat notifications, dashboards,
-the AI assistant. Storage is one JSON file until the database layer arrives; sign-in is a
-demo switcher until real identity arrives.
+the AI assistant. Sign-in is a demo switcher until real identity arrives.
 
 Licence: Apache-2.0. Source and progress: https://github.com/wmkrfjnwvb-svg/agentTable

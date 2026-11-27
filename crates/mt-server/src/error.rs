@@ -74,6 +74,11 @@ impl ApiError {
         ApiError::new(501, "not_yet_available", message)
     }
 
+    /// 503: the server cannot do this now (another server took its database over).
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        ApiError::new(503, "unavailable", message)
+    }
+
     /// 500: something failed inside the server.
     pub fn internal(message: impl Into<String>) -> Self {
         ApiError::new(500, "internal", message)

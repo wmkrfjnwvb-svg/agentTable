@@ -32,7 +32,8 @@ Audits per wave: [`docs/audit/`](docs/audit/).
 Every push to `main` publishes installable packages for Windows, macOS and Linux under
 [Releases → nightly](https://github.com/wmkrfjnwvb-svg/agentTable/releases/tag/nightly), together
 with screenshots of every end-to-end test step. Unpack, start `start.bat` / `start.command` /
-`start.sh`, and the browser opens the product: an empty workspace in which you build your own
+`start.sh`, and the browser opens the product (kept in SQLite files next to it; `--database`
+takes a MySQL or PostgreSQL URL instead): an empty workspace in which you build your own
 bases from the components (tables, fields of every kind, code lists, settings, formulas, people,
 lifecycles and approvals in the process designer, access rules with field limits, periods,
 reviews and share links, code lists with history and four-eyes approval, settings per base) — the

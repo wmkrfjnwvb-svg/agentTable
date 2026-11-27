@@ -12,6 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 mt-audit = { path = "../mt-audit" }
+mt-cluster = { path = "../mt-cluster" }
+mt-ops = { path = "../mt-ops" }
+mt-store = { path = "../mt-store" }
 mt-core = { path = "../mt-core" }
 mt-formula = { path = "../mt-formula" }
 mt-lifecycle = { path = "../mt-lifecycle" }

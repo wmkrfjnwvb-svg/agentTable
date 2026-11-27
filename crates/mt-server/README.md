@@ -40,6 +40,7 @@ and the template gallery. Debug builds read `apps/web/dist` from disk.
 | `seed` | The demo: suppliers, purchase requests, request lines; seven people with different access; the request lifecycle and purchase approval; records created, submitted and approved through the real operations |
 | `builder` | Building a configuration: bases, tables, field editing and deletion (refused while formulas, lifecycles, approvals or access rules use the field), two-way links, code lists and items, settings for `PARAM`, people and groups, templates |
 | `design` | The process designer's format (states, buttons, approval steps with approvers and “only when” conditions, outcomes) and `publish`: compiles it into `mt-lifecycle` definitions, checks them (closed loop, field references), creates or reuses the state field, keeps approval versions |
+| `persist` | Where the workspace is kept: memory, a JSON file, or a database (records in physical tables as `mt-ops` batches, configuration as a document, one transaction per save, fencing) |
 | `settings` | Settings with scopes: workspace values and base overrides in the `mt-refdata` registry, `PARAM` resolution by base, explanations and history |
 | `codelist` | Code lists with a history: changes committed or proposed through the `mt-refdata` ledger, decisions on proposals, versions and “as of” views |
 | `access` | The access builder: grants (who, what, where, which records and fields, limit, period, why), revocation, capability sets, separation-of-duties rules, access reviews, share links, the capability catalogue |
@@ -68,6 +69,13 @@ and the template gallery. Debug builds read `apps/web/dist` from disk.
   narrowing; confidential and protected fields and links to other tables are never shown;
   it stops working when it expires, is withdrawn, or its maker loses `share.manage`. The
   token (24 random bytes) is shown only to those who may manage access and never audited.
+* The workspace is kept in a database through `mt-store` (SQLite by default, MySQL or
+  PostgreSQL by URL), or in a JSON file. In a database every save turns the changed records
+  into `mt-ops` batches (creates, sets, deletes) with the base's next sequence numbers and
+  journal entries, and writes them with the configuration document in one transaction,
+  behind each base's fencing token: a second server on the same database takes it over and
+  the first one's changes are refused (503) instead of overwriting. A transition recomputes
+  at once (formulas reading the state, "changed by / at").
 * A setting has one type for good; it is set for the workspace and may be overridden per base
   (with `settings.manage` on that base). A formula reads `PARAM` with its record's base, never
   with a person. Every change is kept and each value is explained (which level applies, who
@@ -92,6 +100,10 @@ approvals on their version, run quorum steps, parallel branches, fill-in steps a
 enforce fields required only when a condition holds, narrow grants to fields and periods,
 review access, share records with people without an account, and refuse every malformed or
 unauthorised step.
+`tests/database.rs` — 3 tests on SQLite, MySQL and PostgreSQL: a workspace survives a restart
+(records, record metadata, a running approval, the audit chain; the journal numbered without
+gaps), JSON import (and carrying over only into a new database), a second server fencing the
+first out, starting over.
 `tests/process.rs` — 9 tests of lifecycles and approvals through the API: the seeded requests'
 history, submit → approve → order, the CFO step and sending back, rejection, revision,
 withdrawal, cancellation and deletion rules, every refused transition with its reasons, acts

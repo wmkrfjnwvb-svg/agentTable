@@ -8,7 +8,8 @@ import { join } from "node:path";
 const binary = process.env.AGENTTABLE_BIN ?? "../../target/release/agenttable";
 const builderPort = Number(process.env.AGENTTABLE_PORT ?? 18080);
 const samplePort = builderPort + 1;
-const data = (port: number) => join(tmpdir(), `agenttable-e2e-${port}.json`);
+// Each server keeps its workspace in a database of its own: SQLite files in a temporary folder.
+const database = (port: number) => `sqlite://${join(tmpdir(), `agenttable-e2e-${port}`)}`;
 
 const browser = {
   ...devices["Desktop Chrome"],
@@ -34,14 +35,14 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: `"${binary}" --port ${builderPort} --data "${data(builderPort)}" --fresh`,
+      command: `"${binary}" --port ${builderPort} --database "${database(builderPort)}" --fresh`,
       url: `http://127.0.0.1:${builderPort}/api/status`,
       reuseExistingServer: false,
       timeout: 60_000,
       stdout: "pipe",
     },
     {
-      command: `"${binary}" --port ${samplePort} --data "${data(samplePort)}" --fresh --demo`,
+      command: `"${binary}" --port ${samplePort} --database "${database(samplePort)}" --fresh --demo`,
       url: `http://127.0.0.1:${samplePort}/api/status`,
       reuseExistingServer: false,
       timeout: 60_000,

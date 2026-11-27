@@ -25,7 +25,6 @@ use mt_query::{Aggregate, AggregateFn, GroupKey, SortKey};
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -60,8 +59,8 @@ impl Clock {
 pub struct App {
     /// The workspace.
     pub ws: Mutex<Workspace>,
-    /// Where it is saved (not saved, if absent).
-    pub data_file: Option<PathBuf>,
+    /// Where it is kept.
+    pub persist: crate::persist::Persist,
     /// The clock.
     pub clock: Clock,
 }
@@ -78,21 +77,17 @@ impl App {
         let mut ws = self.ws.lock().await;
         let changed = crate::process::tick_all(&mut ws, self.clock.now())?;
         if changed > 0 {
-            self.save(&ws)?;
+            self.save(&ws).await?;
         }
         Ok(changed)
     }
 
     /// Saves the workspace after a change.
-    fn save(&self, ws: &Workspace) -> ApiResult<()> {
-        let Some(path) = &self.data_file else {
-            return Ok(());
-        };
-        let text =
-            serde_json::to_vec_pretty(&ws.data).map_err(|e| ApiError::internal(e.to_string()))?;
-        let temporary = path.with_extension("json.tmp");
-        std::fs::write(&temporary, text).map_err(|e| ApiError::internal(e.to_string()))?;
-        std::fs::rename(&temporary, path).map_err(|e| ApiError::internal(e.to_string()))
+    ///
+    /// # Errors
+    /// When it cannot be written.
+    pub async fn save(&self, ws: &Workspace) -> ApiResult<()> {
+        self.persist.save(ws, self.clock.now()).await
     }
 }
 
@@ -784,7 +779,7 @@ async fn transition(
     let table_id: TableId = parse(&table, "table")?;
     let record_id: RecordId = parse(&record, "record")?;
     crate::process::transition(&mut ws, actor, table_id, record_id, &key, now)?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     let table = ws.table(table_id)?;
     Ok(Json(record_json(&ws, actor, table, record_id, now)?))
 }
@@ -808,7 +803,7 @@ async fn act(
     let actor = actor(&ws, &headers)?;
     let now = app.clock.now();
     let (table_id, record_id) = crate::process::act(&mut ws, actor, run, task, act, &values, now)?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     let table = ws.table(table_id)?;
     Ok(Json(record_json(&ws, actor, table, record_id, now)?))
 }
@@ -884,7 +879,7 @@ async fn create(
     let now = app.clock.now();
     let table_id: TableId = parse(&table, "table")?;
     let id = ws.create_record(actor, table_id, &body.cells, now)?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     let table = ws.table(table_id)?;
     Ok(Json(record_json(&ws, actor, table, id, now)?))
 }
@@ -901,7 +896,7 @@ async fn update(
     let table_id: TableId = parse(&table, "table")?;
     let record_id: RecordId = parse(&record, "record")?;
     ws.update_record(actor, table_id, record_id, &body.cells, now)?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     let table = ws.table(table_id)?;
     Ok(Json(record_json(&ws, actor, table, record_id, now)?))
 }
@@ -919,7 +914,7 @@ async fn delete(
         parse(&record, "record")?,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"deleted": true})))
 }
 
@@ -1378,7 +1373,7 @@ async fn add_field(
         | OptionsSource::RefSet { .. }
         | OptionsSource::Parameter { .. } => ws.add_field(actor, table_id, field, now)?,
     };
-    app.save(&ws)?;
+    app.save(&ws).await?;
     let table = ws.table(table_id)?;
     Ok(Json(
         json!({"field": id, "table": table_json(&ws, actor, table, now)}),
@@ -1449,7 +1444,7 @@ async fn create_base(
         body.description.as_deref().unwrap_or_default(),
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"id": id})))
 }
 
@@ -1469,7 +1464,7 @@ async fn update_base(
         body.description.as_deref(),
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"updated": true})))
 }
 
@@ -1481,7 +1476,7 @@ async fn delete_base(
     let mut ws = app.ws.lock().await;
     let actor = actor(&ws, &headers)?;
     crate::builder::delete_base(&mut ws, actor, parse(&base, "base")?, app.clock.now())?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"deleted": true})))
 }
 
@@ -1512,7 +1507,7 @@ async fn create_table(
         &body.primary,
         now,
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     let table = ws.table(id)?;
     Ok(Json(table_json(&ws, actor, table, now)))
 }
@@ -1535,7 +1530,7 @@ async fn update_table(
         body.description.as_deref(),
         now,
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     let table = ws.table(id)?;
     Ok(Json(table_json(&ws, actor, table, now)))
 }
@@ -1548,7 +1543,7 @@ async fn delete_table(
     let mut ws = app.ws.lock().await;
     let actor = actor(&ws, &headers)?;
     crate::builder::delete_table(&mut ws, actor, parse(&table, "table")?, app.clock.now())?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"deleted": true})))
 }
 
@@ -1570,7 +1565,7 @@ async fn update_field(
         &body,
         now,
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     let table = ws.table(table_id)?;
     Ok(Json(table_json(&ws, actor, table, now)))
 }
@@ -1585,7 +1580,7 @@ async fn delete_field(
     let now = app.clock.now();
     let table_id: TableId = parse(&table, "table")?;
     crate::builder::delete_field(&mut ws, actor, table_id, parse(&field, "field")?, now)?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     let table = ws.table(table_id)?;
     Ok(Json(table_json(&ws, actor, table, now)))
 }
@@ -1613,7 +1608,7 @@ async fn create_refset(
         body.tree,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"id": id})))
 }
 
@@ -1642,7 +1637,7 @@ async fn add_item(
         body.parent,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     let mut answer = outcome.json();
     if let JsonValue::Object(map) = &mut answer {
         map.insert("id".to_owned(), json!(id));
@@ -1671,7 +1666,7 @@ async fn update_item(
         body.enabled,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     let mut answer = outcome.json();
     if let JsonValue::Object(map) = &mut answer {
         map.insert("updated".to_owned(), json!(true));
@@ -1699,7 +1694,7 @@ async fn update_refset(
         body.approval,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(outcome.json()))
 }
 
@@ -1719,7 +1714,7 @@ async fn decide_proposal(
         &decision,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"decided": true, "version": version})))
 }
 
@@ -1749,7 +1744,7 @@ async fn create_person(
         &body.members,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"id": id})))
 }
 
@@ -1780,7 +1775,7 @@ async fn update_person(
         body.members.as_deref(),
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"updated": true})))
 }
 
@@ -1805,7 +1800,7 @@ async fn clear_setting(
     let mut ws = app.ws.lock().await;
     let actor = actor(&ws, &headers)?;
     crate::settings::clear(&mut ws, actor, &key, scope.base, app.clock.now())?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"cleared": true})))
 }
 
@@ -1838,7 +1833,7 @@ async fn set_setting(
     let actor = actor(&ws, &headers)?;
     let value = crate::builder::param_value(&body.kind, &body.text)?;
     crate::builder::set_param(&mut ws, actor, &key, value, body.base, app.clock.now())?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"updated": true})))
 }
 
@@ -1920,7 +1915,7 @@ async fn publish_process(
     let actor = actor(&ws, &headers)?;
     let table_id: TableId = parse(&table, "table")?;
     crate::design::publish(&mut ws, actor, table_id, design, app.clock.now())?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(
         json!({"design": crate::design::design_of(&ws, table_id)}),
     ))
@@ -1954,7 +1949,7 @@ async fn give_grant(
     let mut ws = app.ws.lock().await;
     let actor = actor(&ws, &headers)?;
     let id = crate::access::give(&mut ws, actor, &spec, app.clock.now())?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"id": id})))
 }
 
@@ -1966,7 +1961,7 @@ async fn revoke_grant(
     let mut ws = app.ws.lock().await;
     let actor = actor(&ws, &headers)?;
     crate::access::revoke(&mut ws, actor, parse(&grant, "grant")?, app.clock.now())?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"revoked": true})))
 }
 
@@ -1978,7 +1973,7 @@ async fn open_review(
     let mut ws = app.ws.lock().await;
     let actor = actor(&ws, &headers)?;
     let id = crate::access::open_review(&mut ws, actor, &spec, app.clock.now())?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"id": id})))
 }
 
@@ -2006,7 +2001,7 @@ async fn decide_review(
         body.note,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"decided": true})))
 }
 
@@ -2023,7 +2018,7 @@ async fn complete_review(
         parse(&review, "access review")?,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"completed": true, "revoked": revoked})))
 }
 
@@ -2040,7 +2035,7 @@ async fn cancel_review(
         parse(&review, "access review")?,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"cancelled": true})))
 }
 
@@ -2069,7 +2064,7 @@ async fn create_share(
         token.clone(),
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"id": id, "token": token})))
 }
 
@@ -2086,7 +2081,7 @@ async fn revoke_share(
         parse(&share, "share link")?,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"withdrawn": true})))
 }
 
@@ -2120,7 +2115,7 @@ async fn create_set(
         &body.capabilities,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"id": id})))
 }
 
@@ -2148,7 +2143,7 @@ async fn add_rule(
         body.kind,
         app.clock.now(),
     )?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"id": id})))
 }
 
@@ -2171,7 +2166,7 @@ async fn install_template(
     let mut ws = app.ws.lock().await;
     let actor = actor(&ws, &headers)?;
     crate::builder::install_template(&mut ws, actor, &key, app.clock.now())?;
-    app.save(&ws)?;
+    app.save(&ws).await?;
     Ok(Json(json!({"installed": key})))
 }
 

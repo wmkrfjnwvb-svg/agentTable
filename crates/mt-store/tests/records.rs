@@ -465,3 +465,156 @@ async fn std_the_database_sorts_by_stored_keys_like_the_engine() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn std_batches_of_several_bases_and_a_document_are_written_together_or_not_at_all() {
+    use mt_store::{DocumentWrite, WriteSet};
+    on_every_db(|store| async move {
+        let t = store.create_tenant(tenant(1), "Acme", NOW).await.unwrap();
+        let other = BaseId::from_u128(2);
+        let mut one = BaseState::new(base());
+        let mut two = BaseState::new(other);
+        let create = |b: BaseId, t: u128| Batch {
+            id: ClientOpId {
+                client: ClientId(0),
+                seq: 1,
+            },
+            base: b,
+            ops: vec![Op::Create {
+                table: tbl(t),
+                record: rec(1),
+                cells: BTreeMap::from([(fld(1), Value::Bool(true))]),
+            }],
+        };
+        let Outcome::Accepted(a1) = one.step(&create(base(), 1)).outcome else {
+            panic!()
+        };
+        let Outcome::Accepted(a2) = two.step(&create(other, 2)).outcome else {
+            panic!()
+        };
+        t.prepare(base(), &a1).await.unwrap();
+        t.prepare(other, &a2).await.unwrap();
+        let fence = t
+            .acquire(b"base:2", &NodeId::new(1, 1, "a:1"), None)
+            .await
+            .unwrap();
+        fn set<'a>(
+            a1: &'a Accepted,
+            a2: &'a Accepted,
+            other: BaseId,
+            expected: u64,
+            fence: Option<&'a mt_cluster::FencingToken>,
+        ) -> WriteSet<'a> {
+            WriteSet {
+                batches: vec![
+                    mt_store::Batch {
+                        base: base(),
+                        accepted: a1,
+                        fence: None,
+                    },
+                    mt_store::Batch {
+                        base: other,
+                        accepted: a2,
+                        fence,
+                    },
+                ],
+                document: Some(DocumentWrite {
+                    kind: "workspace",
+                    id: "main",
+                    body: r#"{"v":1}"#,
+                    expected,
+                }),
+            }
+        }
+        // A stale document version: nothing is written.
+        let refused = t
+            .write(&set(&a1, &a2, other, 3, Some(&fence)), ALICE, NOW)
+            .await;
+        assert!(
+            matches!(refused, Err(StoreError::Conflict(_))),
+            "{}: {refused:?}",
+            name(store.dialect())
+        );
+        assert_eq!(
+            (
+                t.last_seq(base()).await.unwrap(),
+                t.last_seq(other).await.unwrap()
+            ),
+            (0, 0)
+        );
+        // A lost fence: nothing is written either.
+        t.acquire(b"base:2", &NodeId::new(2, 1, "b:1"), None)
+            .await
+            .unwrap();
+        let fenced = t
+            .write(&set(&a1, &a2, other, 0, Some(&fence)), ALICE, NOW)
+            .await;
+        assert!(
+            matches!(fenced, Err(StoreError::Fenced { current: 2 })),
+            "{fenced:?}"
+        );
+        assert!(t.document("workspace", "main").await.unwrap().is_none());
+        // All together.
+        assert_eq!(
+            t.write(&set(&a1, &a2, other, 0, None), ALICE, NOW)
+                .await
+                .unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            (
+                t.last_seq(base()).await.unwrap(),
+                t.last_seq(other).await.unwrap()
+            ),
+            (1, 1)
+        );
+        assert_eq!(
+            t.document("workspace", "main").await.unwrap().unwrap().body,
+            r#"{"v":1}"#
+        );
+        let again = WriteSet {
+            batches: vec![],
+            document: Some(DocumentWrite {
+                kind: "workspace",
+                id: "main",
+                body: "{}",
+                expected: 0,
+            }),
+        };
+        assert!(
+            matches!(
+                t.write(&again, ALICE, NOW).await,
+                Err(StoreError::Conflict(_))
+            ),
+            "exists already"
+        );
+        let bad = WriteSet {
+            batches: vec![],
+            document: Some(DocumentWrite {
+                kind: "Bad Kind",
+                id: "x",
+                body: "{}",
+                expected: 1,
+            }),
+        };
+        assert!(matches!(
+            t.write(&bad, ALICE, NOW).await,
+            Err(StoreError::Invalid(_))
+        ));
+        let overflow = WriteSet {
+            batches: vec![],
+            document: Some(DocumentWrite {
+                kind: "workspace",
+                id: "main",
+                body: "{}",
+                expected: u64::MAX,
+            }),
+        };
+        assert!(matches!(
+            t.write(&overflow, ALICE, NOW).await,
+            Err(StoreError::Invalid(_))
+        ));
+        store
+    })
+    .await;
+}

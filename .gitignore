@@ -7,3 +7,7 @@ dist/
 *.log
 .DS_Store
 /dist/
+
+# The local database of a server started from the repository
+agenttable-data/
+agenttable-data.json

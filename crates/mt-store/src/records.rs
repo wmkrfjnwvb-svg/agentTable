@@ -213,49 +213,46 @@ impl Tenant {
         at_ms: i64,
         fence: Option<&FencingToken>,
     ) -> StoreResult<()> {
+        let set = WriteSet {
+            batches: vec![Batch {
+                base,
+                accepted,
+                fence,
+            }],
+            document: None,
+        };
+        self.write(&set, actor, at_ms).await.map(|_| ())
+    }
+
+    /// Writes several bases' batches and a document together, in one transaction: every
+    /// fence and sequence is checked first, then everything is written, or nothing.
+    /// [`Tenant::prepare`] must have run for every batch. Returns the document's new version.
+    ///
+    /// # Errors
+    /// As [`Tenant::commit`]; [`StoreError::Conflict`] when the document is not at the
+    /// expected version.
+    pub async fn write(
+        &self,
+        set: &WriteSet<'_>,
+        actor: PrincipalId,
+        at_ms: i64,
+    ) -> StoreResult<Option<u64>> {
         let d = self.dialect;
         let mut tx = self.pool.begin().await?;
-        if let Some(token) = fence {
-            Tenant::check_fence(d, &mut tx, token).await?;
+        for batch in &set.batches {
+            if let Some(token) = batch.fence {
+                Tenant::check_fence(d, &mut tx, token).await?;
+            }
         }
-        let last: Option<i64> = sqlx::query_scalar(&format!(
-            "SELECT MAX(seq) FROM _journal WHERE base = {}",
-            d.param(1)
-        ))
-        .bind(base.to_string())
-        .fetch_one(&mut *tx)
-        .await?;
-        let last = uint(last.unwrap_or(0))?;
-        if last.checked_add(1) != Some(accepted.seq) {
-            return Err(StoreError::Conflict(format!(
-                "batch {} does not follow {last}",
-                accepted.seq
-            )));
+        for batch in &set.batches {
+            commit_batch(d, &mut tx, batch.base, batch.accepted, actor, at_ms).await?;
         }
-        let body = serde_json::to_string(accepted)
-            .map_err(|e| StoreError::Invalid(format!("a batch: {e}")))?;
-        sqlx::query(&format!(
-            "INSERT INTO _journal (base, seq, client, client_seq, at, actor, body) VALUES ({})",
-            d.params(1, 7)
-        ))
-        .bind(base.to_string())
-        .bind(int(accepted.seq)?)
-        .bind(int(accepted.id.client.0)?)
-        .bind(int(accepted.id.seq)?)
-        .bind(at_ms)
-        .bind(actor.to_string())
-        .bind(body)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| {
-            StoreError::Conflict(format!("the journal refused batch {}: {e}", accepted.seq))
-        })?;
-        let seq = int(accepted.seq)?;
-        for effect in &accepted.effects {
-            write_effect(d, &mut tx, effect, seq).await?;
-        }
+        let version = match &set.document {
+            Some(doc) => Some(write_document(d, &mut tx, doc, at_ms).await?),
+            None => None,
+        };
         tx.commit().await?;
-        Ok(())
+        Ok(version)
     }
 
     /// Accepted batches of a base after a sequence, in order (catching a client up).
@@ -398,6 +395,141 @@ impl Tenant {
             })
             .collect()
     }
+}
+
+/// One base's accepted batch in a [`WriteSet`].
+#[derive(Debug, Clone, Copy)]
+pub struct Batch<'a> {
+    /// The base.
+    pub base: BaseId,
+    /// The batch.
+    pub accepted: &'a Accepted,
+    /// The writer's ownership token for the base, when it holds one.
+    pub fence: Option<&'a FencingToken>,
+}
+
+/// A document written in a [`WriteSet`].
+#[derive(Debug, Clone, Copy)]
+pub struct DocumentWrite<'a> {
+    /// Its kind.
+    pub kind: &'a str,
+    /// Its id.
+    pub id: &'a str,
+    /// The new body.
+    pub body: &'a str,
+    /// The version the writer read (0 for a new document).
+    pub expected: u64,
+}
+
+/// Everything one save writes, together.
+#[derive(Debug, Clone, Default)]
+pub struct WriteSet<'a> {
+    /// Accepted batches, in order (a base's batches in sequence).
+    pub batches: Vec<Batch<'a>>,
+    /// A document.
+    pub document: Option<DocumentWrite<'a>>,
+}
+
+async fn write_document(
+    d: Dialect,
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    doc: &DocumentWrite<'_>,
+    at_ms: i64,
+) -> StoreResult<u64> {
+    crate::dialect::check_ident(doc.kind)?;
+    let next = doc
+        .expected
+        .checked_add(1)
+        .ok_or_else(|| StoreError::Invalid("version overflow".to_owned()))?;
+    let changed = if doc.expected == 0 {
+        sqlx::query(&format!(
+            "INSERT INTO _documents (kind, id, version, body, updated_at) VALUES ({})",
+            d.params(1, 5)
+        ))
+        .bind(doc.kind.to_owned())
+        .bind(doc.id.to_owned())
+        .bind(1_i64)
+        .bind(doc.body.to_owned())
+        .bind(at_ms)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| StoreError::Conflict(format!("{} {} exists already: {e}", doc.kind, doc.id)))?
+        .rows_affected()
+    } else {
+        sqlx::query(&format!(
+            "UPDATE _documents SET version = {}, body = {}, updated_at = {} WHERE kind = {} AND id = {} AND version = {}",
+            d.param(1),
+            d.param(2),
+            d.param(3),
+            d.param(4),
+            d.param(5),
+            d.param(6)
+        ))
+        .bind(int(next)?)
+        .bind(doc.body.to_owned())
+        .bind(at_ms)
+        .bind(doc.kind.to_owned())
+        .bind(doc.id.to_owned())
+        .bind(int(doc.expected)?)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected()
+    };
+    if changed == 1 {
+        Ok(next)
+    } else {
+        Err(StoreError::Conflict(format!(
+            "{} {} is not at version {}",
+            doc.kind, doc.id, doc.expected
+        )))
+    }
+}
+
+async fn commit_batch(
+    d: Dialect,
+    tx: &mut sqlx::Transaction<'_, sqlx::Any>,
+    base: BaseId,
+    accepted: &Accepted,
+    actor: PrincipalId,
+    at_ms: i64,
+) -> StoreResult<()> {
+    let last: Option<i64> = sqlx::query_scalar(&format!(
+        "SELECT MAX(seq) FROM _journal WHERE base = {}",
+        d.param(1)
+    ))
+    .bind(base.to_string())
+    .fetch_one(&mut **tx)
+    .await?;
+    let last = uint(last.unwrap_or(0))?;
+    if last.checked_add(1) != Some(accepted.seq) {
+        return Err(StoreError::Conflict(format!(
+            "batch {} does not follow {last}",
+            accepted.seq
+        )));
+    }
+    let body = serde_json::to_string(accepted)
+        .map_err(|e| StoreError::Invalid(format!("a batch: {e}")))?;
+    sqlx::query(&format!(
+        "INSERT INTO _journal (base, seq, client, client_seq, at, actor, body) VALUES ({})",
+        d.params(1, 7)
+    ))
+    .bind(base.to_string())
+    .bind(int(accepted.seq)?)
+    .bind(int(accepted.id.client.0)?)
+    .bind(int(accepted.id.seq)?)
+    .bind(at_ms)
+    .bind(actor.to_string())
+    .bind(body)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| {
+        StoreError::Conflict(format!("the journal refused batch {}: {e}", accepted.seq))
+    })?;
+    let seq = int(accepted.seq)?;
+    for effect in &accepted.effects {
+        write_effect(d, tx, effect, seq).await?;
+    }
+    Ok(())
 }
 
 async fn write_effect(
