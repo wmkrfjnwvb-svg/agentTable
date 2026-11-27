@@ -608,6 +608,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mt-ops"
+version = "0.1.0"
+dependencies = [
+ "mt-core",
+ "postcard",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "mt-perm"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,20 @@
+[package]
+name = "mt-ops"
+description = "Operation model: typed record changes, idempotent client op ids, per-base sequence, field-level conflicts, client replicas with rebase, binary codec"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+
+[dependencies]
+mt-core = { path = "../mt-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true
