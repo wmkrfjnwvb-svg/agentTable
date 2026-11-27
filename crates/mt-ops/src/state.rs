@@ -305,6 +305,12 @@ impl BaseState {
         self.outcomes.get(&id)
     }
 
+    /// Learns a decision made earlier (read back from the journal after a restart) without
+    /// applying anything, so the batch is recognised if it is sent again.
+    pub fn recall(&mut self, outcome: Outcome) {
+        self.remember(outcome);
+    }
+
     fn remember(&mut self, outcome: Outcome) {
         let id = outcome.id();
         let newest = self.newest.entry(id.client).or_insert(0);

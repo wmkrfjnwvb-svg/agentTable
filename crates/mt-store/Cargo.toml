@@ -1,0 +1,25 @@
+[package]
+name = "mt-store"
+description = "Storage on SQLite, MySQL and PostgreSQL: a database per tenant, physical tables, the operation journal, fencing epochs, scheduler leases and a job queue with leases"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+
+[dependencies]
+mt-core = { path = "../mt-core" }
+mt-ops = { path = "../mt-ops" }
+mt-cluster = { path = "../mt-cluster" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "any", "sqlite", "mysql", "postgres"] }
+tokio = { version = "1", features = ["sync"] }
+url = "2"
+
+[dev-dependencies]
+proptest = { workspace = true }
+tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

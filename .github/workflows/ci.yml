@@ -42,6 +42,29 @@ jobs:
   test:
     name: Rust tests
     runs-on: ubuntu-latest
+    # Every storage test runs on SQLite, MySQL and PostgreSQL (MT_TEST_REQUIRE_ALL_DBS=1 makes a
+    # missing database a failure, not a skip).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mt
+          POSTGRES_PASSWORD: mt
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mt" --health-interval 5s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1" --health-interval 5s --health-timeout 5s --health-retries 40
+    env:
+      MT_TEST_POSTGRES_URL: postgres://mt:mt@127.0.0.1:5432/postgres
+      MT_TEST_MYSQL_URL: mysql://root@127.0.0.1:3306/mysql
+      MT_TEST_REQUIRE_ALL_DBS: "1"
     steps:
       - uses: actions/checkout@v5
       - name: Install the pinned toolchain (rust-toolchain.toml)
@@ -62,12 +85,35 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: wasm
-      - name: Build every pure crate for wasm32-unknown-unknown
-        run: cargo build --workspace --exclude mt-server --locked --target wasm32-unknown-unknown
+      - name: Build every pure crate for wasm32-unknown-unknown (not the server, not storage)
+        run: cargo build --workspace --exclude mt-server --exclude mt-store --locked --target wasm32-unknown-unknown
 
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    # Every storage test runs on SQLite, MySQL and PostgreSQL (MT_TEST_REQUIRE_ALL_DBS=1 makes a
+    # missing database a failure, not a skip).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mt
+          POSTGRES_PASSWORD: mt
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mt" --health-interval 5s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1" --health-interval 5s --health-timeout 5s --health-retries 40
+    env:
+      MT_TEST_POSTGRES_URL: postgres://mt:mt@127.0.0.1:5432/postgres
+      MT_TEST_MYSQL_URL: mysql://root@127.0.0.1:3306/mysql
+      MT_TEST_REQUIRE_ALL_DBS: "1"
     steps:
       - uses: actions/checkout@v5
       - name: Install the pinned toolchain (rust-toolchain.toml)
@@ -93,7 +139,7 @@ jobs:
       - name: Engine crates reach 98 %
         run: cargo llvm-cov report --fail-under-lines 98 --ignore-filename-regex 'crates/mt-server/'
       - name: The server reaches 90 % (it is also covered by the browser tests)
-        run: cargo llvm-cov report --fail-under-lines 90 --ignore-filename-regex 'crates/mt-(core|cluster|audit|refdata|query|formula|perm|lifecycle)/'
+        run: cargo llvm-cov report --fail-under-lines 90 --ignore-filename-regex 'crates/mt-(core|cluster|audit|refdata|query|formula|perm|lifecycle|ops|store)/'
 
   web:
     name: Web app

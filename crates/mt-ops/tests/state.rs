@@ -433,6 +433,14 @@ fn std_replaying_accepted_batches_rebuilds_the_state() {
     assert_eq!(copy.seq(), owner.seq());
     // A replayed batch is remembered: sent again to the copy, it is recognised.
     assert!(copy.step(&batches[0]).repeated);
+    // A base loaded from storage learns recent decisions from the journal.
+    let mut fresh = BaseState::from_records(base_id(), owner.seq(), BTreeMap::new());
+    let first = owner.outcome(id(1, 1)).unwrap().clone();
+    fresh.recall(first.clone());
+    let again = fresh.step(&batches[0]);
+    assert!(again.repeated);
+    assert_eq!(again.outcome, first);
+    assert_eq!(fresh.seq(), owner.seq(), "recalling applies nothing");
     // Loaded from storage at a sequence, then continued.
     let loaded = BaseState::from_records(
         base_id(),

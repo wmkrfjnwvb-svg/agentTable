@@ -22,6 +22,7 @@ anomalous, concurrency, cross-platform) plus property, model and simulation test
 | 2 | `mt-perm` | Capabilities, grants, separation of duties, field permissions, share links, access reviews, explain | done |
 | 2 | `mt-lifecycle` | Lifecycles with the closed-loop check, business calendars, SLA clocks, the approval engine | done |
 | 3 | `mt-ops` | Operation model: batches, idempotent client op ids, per-base sequence, per-cell conflicts, client replicas with rebase, binary codec | done |
+| 3 | `mt-store` | SQLite, MySQL and PostgreSQL: a database per tenant, physical tables, the journal, fencing epochs, leases, a job queue with leases | done |
 | — | `mt-server` + `apps/web` | End-to-end build: one binary with the web app; placeholders for what is not built yet | live, grows every wave |
 | 3–8 | storage, API, identity, automation, AI, real-time grid | see doc 21 | planned |
 
