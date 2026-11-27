@@ -1106,6 +1106,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mt-sim"
+version = "0.1.0"
+dependencies = [
+ "mt-cluster",
+ "mt-core",
+ "mt-ops",
+]
+
+[[package]]
 name = "mt-store"
 version = "0.1.0"
 dependencies = [

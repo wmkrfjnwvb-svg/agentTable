@@ -1,0 +1,15 @@
+[package]
+name = "mt-sim"
+description = "Deterministic whole-system simulation: nodes owning bases with fencing, clients editing through them, a shared database, job workers — with delays, loss, duplication, partitions, crashes and restarts"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+
+[dependencies]
+mt-core = { path = "../mt-core" }
+mt-ops = { path = "../mt-ops" }
+mt-cluster = { path = "../mt-cluster" }
+
+[lints]
+workspace = true

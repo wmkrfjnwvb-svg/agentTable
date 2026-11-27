@@ -121,8 +121,13 @@ async fn std_a_tenant_on_an_older_schema_is_brought_up_to_date_when_opened() {
             store.info(tenant(1)).await.unwrap().unwrap().schema_version,
             mt_store::schema::TENANT_VERSION
         );
-        // Usable: the migration is idempotent over the existing tables.
+        // Usable: the migration is idempotent over the existing tables, and adds the new ones.
         t.put_document("view", "a", "{}", 0, NOW).await.unwrap();
+        assert!(t
+            .refusals(mt_core::id::BaseId::from_u128(1), 5)
+            .await
+            .unwrap()
+            .is_empty());
         // A tenant row that is not readable.
         sqlx::query("UPDATE tenants SET id = 'not-an-id'")
             .execute(store.control())

@@ -99,7 +99,7 @@ deferred to wave 2 with an owner (R1-07…R1-10 below are deferrals, not defects
 | R1-07 | — | Conditional validation and group visibility conditions need a condition language | **Deferred to wave 2**: the condition type goes into `mt-core::condition` (data) and is evaluated and compiled to SQL by `mt-query`; first work item of wave 2 |
 | R1-08 | — | Field-group capability (view / edit) needs capability keys | **Deferred to wave 2** (`mt-perm` defines them) |
 | R1-09 | — | Computed fields (formula, lookup, rollup), the built-in field-type registry (8 picker groups) and library items | **Deferred to wave 2** (with `mt-formula`; the registry needs the computed facet) |
-| R1-10 | — | Job queue with leases is in the cluster design table but in no wave-1 crate | **Deferred to wave 3** (pure lease / visibility / back-off state machine next to its store) |
+| R1-10 | — | Job queue with leases is in the cluster design table but in no wave-1 crate | **Deferred to wave 3** — **closed in wave 3**: `mt-store::jobs` (claims with leases and tokens, back-off, dead jobs), tested on three engines and in `mt-sim` |
 
 ## 4. Definition of done (doc 21 §6)
 

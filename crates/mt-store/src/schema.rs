@@ -9,7 +9,7 @@ use sqlx::AnyPool;
 /// The control schema's version.
 pub const CONTROL_VERSION: i64 = 1;
 /// The tenant schema's version.
-pub const TENANT_VERSION: i64 = 1;
+pub const TENANT_VERSION: i64 = 2;
 
 fn index(d: Dialect, name: &str, table: &str, columns: &str) -> String {
     match d {
@@ -99,6 +99,13 @@ fn tenant_steps(d: Dialect, version: i64) -> Vec<String> {
             steps.retain(|s| !s.is_empty());
             steps
         }
+        // Refused batches, so every later owner of a base answers a batch sent again the same
+        // way (found by the whole-system simulation, `mt-sim`).
+        2 => vec![format!(
+            "CREATE TABLE IF NOT EXISTS _refusals (base {key} NOT NULL, client {int} NOT NULL, \
+             client_seq {int} NOT NULL, at {int} NOT NULL, body {text} NOT NULL, \
+             PRIMARY KEY (base, client, client_seq)){opts}"
+        )],
         _ => Vec::new(),
     }
 }

@@ -14,7 +14,7 @@ use mt_cluster::FencingToken;
 use mt_core::id::{BaseId, FieldId, PrincipalId, RecordId, TableId};
 use mt_core::sortkey::sort_key;
 use mt_core::value::Value;
-use mt_ops::{Accepted, CellState, Effect, RecordState};
+use mt_ops::{Accepted, CellState, Effect, RecordState, Rejection};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A base's records as stored: key → record.
@@ -253,6 +253,81 @@ impl Tenant {
         };
         tx.commit().await?;
         Ok(version)
+    }
+
+    /// Journals a refused batch, so that a later owner of the base gives a repeat of it the
+    /// same answer. Idempotent. With a token, only the base's current owner may.
+    ///
+    /// # Errors
+    /// [`StoreError::Fenced`]; the database's errors.
+    pub async fn refuse(
+        &self,
+        base: BaseId,
+        rejection: &Rejection,
+        at_ms: i64,
+        fence: Option<&FencingToken>,
+    ) -> StoreResult<()> {
+        let d = self.dialect;
+        let body = serde_json::to_string(rejection)
+            .map_err(|e| StoreError::Invalid(format!("a refusal: {e}")))?;
+        let mut tx = self.pool.begin().await?;
+        if let Some(token) = fence {
+            Tenant::check_fence(d, &mut tx, token).await?;
+        }
+        let exists: Option<i64> = sqlx::query_scalar(&format!(
+            "SELECT client FROM _refusals WHERE base = {} AND client = {} AND client_seq = {}",
+            d.param(1),
+            d.param(2),
+            d.param(3)
+        ))
+        .bind(base.to_string())
+        .bind(int(rejection.id.client.0)?)
+        .bind(int(rejection.id.seq)?)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if exists.is_none() {
+            sqlx::query(&format!(
+                "INSERT INTO _refusals (base, client, client_seq, at, body) VALUES ({})",
+                d.params(1, 5)
+            ))
+            .bind(base.to_string())
+            .bind(int(rejection.id.client.0)?)
+            .bind(int(rejection.id.seq)?)
+            .bind(at_ms)
+            .bind(body)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The most recent refusals of a base (up to `count`), oldest first, for an owner to
+    /// recall.
+    ///
+    /// # Errors
+    /// The database's errors; [`StoreError::Corrupt`].
+    pub async fn refusals(&self, base: BaseId, count: usize) -> StoreResult<Vec<Rejection>> {
+        let d = self.dialect;
+        let rows = sqlx::query(&format!(
+            "SELECT body FROM _refusals WHERE base = {} ORDER BY at DESC, client DESC, client_seq DESC LIMIT {}",
+            d.param(1),
+            d.param(2)
+        ))
+        .bind(base.to_string())
+        .bind(int(u64::try_from(count).unwrap_or(u64::MAX))?)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut list = rows
+            .iter()
+            .map(|row| {
+                let body = crate::row::text(row, "body")?;
+                serde_json::from_str(&body)
+                    .map_err(|e| StoreError::Corrupt(format!("refusal: {e}")))
+            })
+            .collect::<StoreResult<Vec<Rejection>>>()?;
+        list.reverse();
+        Ok(list)
     }
 
     /// Accepted batches of a base after a sequence, in order (catching a client up).

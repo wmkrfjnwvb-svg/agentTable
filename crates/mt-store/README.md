@@ -14,6 +14,8 @@ user's tables, ownership epochs (fencing), scheduler leases and a **job queue wi
 | `Tenant::ensure_table` / `ensure_field` / `prepare` | Physical tables `t_<table>` and columns `f_` (value as canonical JSON), `sk_` (sort key), `cv_` (cell version) per field — names from ids only |
 | `Tenant::commit(base, accepted, actor, at, fence)` | One accepted `mt-ops` batch in one transaction: fence check, sequence check, journal row, row changes |
 | `Tenant::load_base` / `last_seq` / `journal` / `journal_tail` | Reading a base back (to rebuild `mt_ops::BaseState`), catch-up and repeat recognition after a restart |
+| `Tenant::write(&WriteSet, actor, at)` | Several bases' batches and a document in one transaction (every fence and sequence checked first) |
+| `Tenant::refuse` / `refusals` | Refused batches, journaled so a later owner answers a repeat the same way (found by `mt-sim`) |
 | `Tenant::ids_by(table, field)` | Record order by the stored sort keys |
 | `Tenant::epoch` / `compare_and_set_epoch` / `acquire` / `release` | Ownership epochs (as `mt-cluster`'s `EpochStore` / `Fencer`) |
 | `Tenant::lease` / `compare_and_set_lease` | Scheduler shard leases (as `mt-cluster`'s `LeaseStore`) |
@@ -41,6 +43,8 @@ user's tables, ownership epochs (fencing), scheduler leases and a **job queue wi
   4 s, … up to an hour; after the last attempt (or when its worker stops answering) a job is
   `dead`, and can be revived. Claims skip rows locked by other workers on MySQL and
   PostgreSQL; SQLite has a single writer (one connection per file).
+* **Refusals are journaled** (tenant schema 2): an owner recalls them on load, so a batch its
+  client was told was refused is never applied by a later owner.
 * **Damaged data is reported, not trusted** (`Corrupt`): half-recorded owners, negative
   numbers, unknown states, unreadable ids.
 
@@ -67,7 +71,7 @@ missing one fail.
 | `tests/store.rs` | standard, invalid | Tenants and databases, reopening, bad URLs and names |
 | `tests/fencing.rs` | standard, model-based | Documents, epochs, leases; 120 random compare-and-set steps against `mt-cluster`'s reference |
 | `tests/jobs.rs` | standard, edge, invalid, model-based, concurrency | Lifecycle, backoff, stalled workers, dead jobs and revival; 150 random steps against a reference; 6 workers claiming 60 jobs at once — each runs once |
-| `tests/records.rs` | standard, edge, invalid, concurrency | Every value type loads back exactly, journal and catch-up, restart with repeat recognition, fencing, sequence conflicts and rollback, one batch committed from 6 tasks lands once, sort order equal to the engine's |
+| `tests/records.rs` | standard, edge, invalid, concurrency | Every value type loads back exactly, journal and catch-up, restart with repeat recognition, fencing, sequence conflicts and rollback, one batch committed from 6 tasks lands once, sort order equal to the engine's, several bases and a document written together or not at all, refusals journaled for the next owner |
 | `tests/maintenance.rs` | anomalous, concurrency | Damaged rows, an older schema migrated on open, unreachable servers time out, 8 nodes racing for ownership |
 
-Coverage: 97.5 % of lines (the rest are defensive error branches).
+Coverage: 97.6 % of lines (the rest are defensive error branches).

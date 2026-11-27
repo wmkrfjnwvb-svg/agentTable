@@ -618,3 +618,62 @@ async fn std_batches_of_several_bases_and_a_document_are_written_together_or_not
     })
     .await;
 }
+
+#[tokio::test]
+async fn std_refusals_are_journaled_for_the_next_owner() {
+    on_every_db(|store| async move {
+        let t = store.create_tenant(tenant(1), "Acme", NOW).await.unwrap();
+        let mut owner = BaseState::new(base());
+        let Outcome::Rejected(refused) = owner
+            .step(&batch(1, vec![set(1, 9, 1, Value::Bool(true))]))
+            .outcome
+        else {
+            panic!()
+        };
+        let fence = t
+            .acquire(b"base:1", &NodeId::new(1, 1, "a:1"), None)
+            .await
+            .unwrap();
+        t.refuse(base(), &refused, NOW, Some(&fence)).await.unwrap();
+        t.refuse(base(), &refused, NOW, Some(&fence)).await.unwrap();
+        assert_eq!(
+            t.refusals(base(), 10).await.unwrap(),
+            vec![refused.clone()],
+            "{}",
+            name(store.dialect())
+        );
+        // A later owner learns it: the same batch sent again gets the same answer, even
+        // though it would apply now.
+        let mut next = BaseState::new(base());
+        let Outcome::Accepted(create) = next
+            .step(&batch(
+                2,
+                vec![Op::Create {
+                    table: tbl(1),
+                    record: rec(9),
+                    cells: BTreeMap::new(),
+                }],
+            ))
+            .outcome
+        else {
+            panic!()
+        };
+        let _ = create;
+        for r in t.refusals(base(), 10).await.unwrap() {
+            next.recall(Outcome::Rejected(r));
+        }
+        let again = next.step(&batch(1, vec![set(1, 9, 1, Value::Bool(true))]));
+        assert!(again.repeated);
+        assert_eq!(again.outcome, Outcome::Rejected(refused.clone()));
+        // A superseded owner cannot journal a refusal.
+        t.acquire(b"base:1", &NodeId::new(2, 1, "b:1"), None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            t.refuse(base(), &refused, NOW, Some(&fence)).await,
+            Err(StoreError::Fenced { .. })
+        ));
+        store
+    })
+    .await;
+}
